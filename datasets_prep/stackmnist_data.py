@@ -7,16 +7,16 @@
 
 
 import numpy as np
-from PIL import Image
 import torchvision.datasets as dset
 import torchvision.transforms as transforms
+from PIL import Image
 
 
 class StackedMNIST(dset.MNIST):
-    def __init__(self, root, train=True, transform=None, target_transform=None,
-                 download=False):
-        super(StackedMNIST, self).__init__(root=root, train=train, transform=transform,
-                                           target_transform=target_transform, download=download)
+    def __init__(self, root, train=True, transform=None, target_transform=None, download=False):
+        super(StackedMNIST, self).__init__(
+            root=root, train=train, transform=transform, target_transform=target_transform, download=download
+        )
 
         index1 = np.hstack([np.random.permutation(len(self.data)), np.random.permutation(len(self.data))])
         index2 = np.hstack([np.random.permutation(len(self.data)), np.random.permutation(len(self.data))])
@@ -48,18 +48,15 @@ class StackedMNIST(dset.MNIST):
 
         return img, target
 
+
 def _data_transforms_stacked_mnist():
     """Get data transforms for cifar10."""
-    train_transform = transforms.Compose([
-        transforms.Pad(padding=2),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))
-    ])
+    train_transform = transforms.Compose(
+        [transforms.Pad(padding=2), transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+    )
 
-    valid_transform = transforms.Compose([
-        transforms.Pad(padding=2),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))
-    ])
+    valid_transform = transforms.Compose(
+        [transforms.Pad(padding=2), transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+    )
 
     return train_transform, valid_transform
