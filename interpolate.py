@@ -3,28 +3,35 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-import matplotlib.pyplot as plt
+import decord as de
 import numpy as np
 import torch
 import torchvision
-from torch.nn.functional import conv1d, pad
+from torch.nn.functional import conv1d, interpolate, pad
 from torchcubicspline import NaturalCubicSpline, natural_cubic_spline_coeffs
 from tqdm import tqdm
 
 from score_sde.models.ncsnpp_generator_adagn import NCSNpp
 from test_ddgan import Posterior_Coefficients, extract
 
+de.bridge.set_bridge("torch")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def gaussian_filter(x, sigma, mode="circular"):
     dim = len(x.shape)
-    n_frames = x.shape[0]
     while len(x.shape) < 3:
         x = x[:, None]
 
-    radius = min(int(sigma * 4), len(x))
-    sigma = radius / 4
+    request_vs_reality = int(sigma * 4) - len(x)
+    if request_vs_reality > 0:
+        radius = len(x)
+        sigma = radius / 4
+        repeat = 1 + request_vs_reality // len(x)
+    else:
+        radius = int(sigma * 4)
+        repeat = 1
+
     channels = x.shape[1]
 
     kernel = torch.arange(-radius, radius + 1, dtype=torch.float32, device=x.device)
@@ -37,8 +44,9 @@ def gaussian_filter(x, sigma, mode="circular"):
         x = x.view(t, c, h * w)
     x = x.transpose(0, 2)
 
-    x = pad(x, (radius, radius), mode=mode)
-    x = conv1d(x, weight=kernel, groups=channels)
+    for _ in range(repeat):
+        x = pad(x, (radius, radius), mode=mode)
+        x = conv1d(x, weight=kernel, groups=channels)
 
     x = x.transpose(0, 2)
     if dim == 4:
@@ -61,18 +69,21 @@ def spline_loop(y, size):
 
 @torch.inference_mode()
 def interpolate(
-    # output settings
-    n_interps,
-    n_frames,
-    num_channels,
-    image_size,
     batch_size,
+    # interpolation settings
     seed,
-    num_timesteps,
+    n_frames,
+    fps,
+    n_interps,
+    video_init,
+    var_scale,
     init_noise_smooth,
     latent_smooth,
     post_noise_smooth,
     # checkpoint settings
+    image_size,
+    num_channels,
+    num_timesteps,
     dataset,
     exp,
     nz,
@@ -105,6 +116,16 @@ def interpolate(
     post_mu2 = C.posterior_mean_coef2
     post_log_var = C.posterior_log_variance_clipped
 
+    if video_init is not None:
+        v = de.VideoReader(video_init, width=image_size, height=image_size)
+        fps = round(v.get_avg_fps())
+        video = v[:].permute(0, 3, 1, 2).float().contiguous()
+        video -= video.mean()
+        video /= video.std()
+        n_frames = len(video)
+    else:
+        video = None
+
     for i in range(n_interps):
         init_noise = np.random.RandomState(seed + i + 1).randn(n_frames, num_channels, image_size, image_size)
         init_noise = torch.from_numpy(init_noise).float()
@@ -121,28 +142,40 @@ def interpolate(
         latents = gaussian_filter(latents, latent_smooth)
         latents /= latents.square().mean().sqrt()
 
+        if video is None:
+            init = init_noise
+        else:
+            init = (video + var_scale * init_noise) / (var_scale + 1)
+
         imgs = []
         for b in tqdm(range(0, n_frames, batch_size)):
 
-            x_t = init_noise[b : b + batch_size].to(device)
+            x_t = init[b : b + batch_size].to(device)
             p_n = post_noise[b : b + batch_size].to(device)
 
             for i in reversed(range(num_timesteps)):
-                t = torch.full((x_t.size(0),), i, dtype=torch.int64, device=device)
+                t = torch.full((len(x_t),), i, dtype=torch.int64, device=device)
                 z = latents[b : b + batch_size, i].to(device)
 
+                # get proposal image
                 x_0 = netG(x_t, t, z)
 
+                # weigh versus current image
                 x_t = extract(post_mu1, t, x_t.shape) * x_0 + extract(post_mu2, t, x_t.shape) * x_t
-                if i != 0:
+
+                # add noise to proposal image for next step (unless there is no next step)
+                if i > 0:
                     log_var = extract(post_log_var, t, x_t.shape)
                     x_t += torch.exp(0.5 * log_var) * p_n
 
             imgs.append(x_t.cpu())
 
-        filename = f"{exp_path}/interpolation_netG_{epoch_id}_seed{seed}_{str(uuid4())[:6]}.mp4"
-        video = torch.cat(imgs).permute(0, 2, 3, 1).add(1).div(2).mul(255).cpu()
-        torchvision.io.write_video(filename, video, fps=24)
+        task = f"{Path(video_init).stem}_transfer" if video_init is not None else "interpolation"
+        filename = (
+            f"{exp_path}/diffusionGAN_{task}_{Path(dataset).stem}_epoch{epoch_id}_seed{seed}_{str(uuid4())[:6]}.mp4"
+        )
+        output = torch.cat(imgs).permute(0, 2, 3, 1).add(1).div(2).mul(255).cpu()
+        torchvision.io.write_video(filename, output, fps=fps)
 
 
 if __name__ == "__main__":
@@ -193,8 +226,11 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=32, help="sample generating batch size")
 
     parser.add_argument("--n_frames", type=int, default=20*24, help="number of frames in each interpolation")
+    parser.add_argument("--fps", type=float, default=24, help="frames per second in output video")
     parser.add_argument("--n_interps", type=int, default=1, help="number of interpolation videos to generate")
-    parser.add_argument("--init_noise_smooth", type=int, default=30, help="sigma of temporal gaussian filter for initial noise")
+    parser.add_argument("--video_init", type=str, default=None, help="video to use as initialization")
+    parser.add_argument("--var_scale", type=float, default=1, help="weight of init noise when video_init is used. lower values preserve content video more.")
+    parser.add_argument("--init_noise_smooth", type=int, default=100, help="sigma of temporal gaussian filter for initial noise")
     parser.add_argument("--latent_smooth", type=int, default=400, help="sigma of temporal gaussian filter for latent vectors")
     parser.add_argument("--post_noise_smooth", type=int, default=400, help="sigma of temporal gaussian filter for posterior noise")
 

@@ -151,7 +151,6 @@ def sample_and_test(args):
     parent_dir = f"/home/hans/modelzoo/dd_gan/{Path(args.dataset).stem}"
     exp_path = os.path.join(parent_dir, args.exp)
     ckpt = torch.load(f"{exp_path}/netG_{args.epoch_id}.pth", map_location=device)
-    print(netG)
 
     # loading weights from ddp in single gpu
     for key in list(ckpt.keys()):
