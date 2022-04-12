@@ -35,26 +35,25 @@ def extract(input, t, shape):
     return out
 
 
-def get_time_schedule(args, device):
-    n_timestep = args.num_timesteps
+def get_time_schedule(num_timesteps, device):
     eps_small = 1e-3
-    t = np.arange(0, n_timestep + 1, dtype=np.float64)
-    t = t / n_timestep
+    t = np.arange(0, num_timesteps + 1, dtype=np.float64)
+    t = t / num_timesteps
     t = torch.from_numpy(t) * (1.0 - eps_small) + eps_small
     return t.to(device)
 
 
-def get_sigma_schedule(args, device):
-    n_timestep = args.num_timesteps
-    beta_min = args.beta_min
-    beta_max = args.beta_max
+def get_sigma_schedule(num_timesteps, beta_min, beta_max, use_geometric, device):
+    n_timestep = num_timesteps
+    beta_min = beta_min
+    beta_max = beta_max
     eps_small = 1e-3
 
     t = np.arange(0, n_timestep + 1, dtype=np.float64)
     t = t / n_timestep
     t = torch.from_numpy(t) * (1.0 - eps_small) + eps_small
 
-    if args.use_geometric:
+    if use_geometric:
         var = var_func_geometric(t, beta_min, beta_max)
     else:
         var = var_func_vp(t, beta_min, beta_max)
@@ -71,9 +70,9 @@ def get_sigma_schedule(args, device):
 
 #%% posterior sampling
 class Posterior_Coefficients:
-    def __init__(self, args, device):
+    def __init__(self, num_timesteps, beta_min, beta_max, use_geometric, device):
 
-        _, _, self.betas = get_sigma_schedule(args, device=device)
+        _, _, self.betas = get_sigma_schedule(num_timesteps, beta_min, beta_max, use_geometric, device)
 
         # we don't need the zeros
         self.betas = self.betas.type(torch.float32)[1:]
@@ -124,13 +123,10 @@ def sample_from_model(coefficients, generator, n_time, x_init, T, opt):
     with torch.no_grad():
         for i in reversed(range(n_time)):
             t = torch.full((x.size(0),), i, dtype=torch.int64).to(x.device)
-
-            t_time = t
             latent_z = torch.randn(x.size(0), opt.nz, device=x.device)  # .to(x.device)
-            x_0 = generator(x, t_time, latent_z)
+            x_0 = generator(x, t, latent_z)
             x_new = sample_posterior(coefficients, x_0, x, t)
             x = x_new.detach()
-
     return x
 
 
@@ -155,6 +151,7 @@ def sample_and_test(args):
     parent_dir = f"/home/hans/modelzoo/dd_gan/{Path(args.dataset).stem}"
     exp_path = os.path.join(parent_dir, args.exp)
     ckpt = torch.load(f"{exp_path}/netG_{args.epoch_id}.pth", map_location=device)
+    print(netG)
 
     # loading weights from ddp in single gpu
     for key in list(ckpt.keys()):
@@ -162,9 +159,9 @@ def sample_and_test(args):
     netG.load_state_dict(ckpt)
     netG.eval()
 
-    T = get_time_schedule(args, device)
+    T = get_time_schedule(args.num_timesteps, device)
 
-    pos_coeff = Posterior_Coefficients(args, device)
+    pos_coeff = Posterior_Coefficients(args.num_timesteps, args.beta_min, args.beta_max, args.use_geometric, device)
 
     iters_needed = 50000 // args.batch_size
 
@@ -197,7 +194,8 @@ def sample_and_test(args):
             fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
             fake_sample = to_range_0_1(fake_sample)
             imgs.append(fake_sample)
-        torchvision.utils.save_image(torch.cat(imgs), f"{exp_path}/test_samples_netG_{args.epoch_id}.jpg", nrow=16)
+        imgs = torch.cat(imgs)
+        torchvision.utils.save_image(imgs, f"{exp_path}/test_samples_netG_{args.epoch_id}.jpg", nrow=16)
 
 
 if __name__ == "__main__":
