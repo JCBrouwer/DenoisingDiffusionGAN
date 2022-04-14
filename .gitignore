@@ -1,6 +1,7 @@
 *.beton
 .vscode/
 generated_samples/
+*.ckpt
 
 # Node artifact files
 node_modules/
