@@ -229,9 +229,9 @@ if __name__ == "__main__":
     parser.add_argument("--fps", type=float, default=24, help="frames per second in output video")
     parser.add_argument("--n_interps", type=int, default=1, help="number of interpolation videos to generate")
     parser.add_argument("--video_init", type=str, default=None, help="video to use as initialization")
-    parser.add_argument("--var_scale", type=float, default=1, help="weight of init noise when video_init is used. lower values preserve content video more.")
-    parser.add_argument("--init_noise_smooth", type=int, default=100, help="sigma of temporal gaussian filter for initial noise")
-    parser.add_argument("--latent_smooth", type=int, default=400, help="sigma of temporal gaussian filter for latent vectors")
-    parser.add_argument("--post_noise_smooth", type=int, default=400, help="sigma of temporal gaussian filter for posterior noise")
+    parser.add_argument("--var_scale", type=float, default=1., help="weight of init noise when video_init is used. lower values preserve content video more.")
+    parser.add_argument("--init_noise_smooth", type=int, default=400, help="sigma of temporal gaussian filter for initial noise")
+    parser.add_argument("--latent_smooth", type=int, default=50, help="sigma of temporal gaussian filter for latent vectors")
+    parser.add_argument("--post_noise_smooth", type=int, default=200, help="sigma of temporal gaussian filter for posterior noise")
 
     interpolate(**vars(parser.parse_args()))

@@ -6,11 +6,13 @@
 # ---------------------------------------------------------------
 import argparse
 import os
+from glob import glob
 from pathlib import Path
 
 import numpy as np
 import torch
 import torchvision
+from tqdm import tqdm
 
 from pytorch_fid.fid_score import calculate_fid_given_paths
 from score_sde.models.ncsnpp_generator_adagn import NCSNpp
@@ -150,7 +152,8 @@ def sample_and_test(args):
     netG = NCSNpp(args).to(device)
     parent_dir = f"/home/hans/modelzoo/dd_gan/{Path(args.dataset).stem}"
     exp_path = os.path.join(parent_dir, args.exp)
-    ckpt = torch.load(f"{exp_path}/netG_{args.epoch_id}.pth", map_location=device)
+    ckpt_path = f"{exp_path}/netG_{args.epoch_id}.pth"
+    ckpt = torch.load(ckpt_path, map_location=device)
 
     # loading weights from ddp in single gpu
     for key in list(ckpt.keys()):
@@ -162,33 +165,29 @@ def sample_and_test(args):
 
     pos_coeff = Posterior_Coefficients(args.num_timesteps, args.beta_min, args.beta_max, args.use_geometric, device)
 
-    iters_needed = 50000 // args.batch_size
-
-    save_dir = "./generated_samples/{}".format(args.dataset)
-
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
     if args.compute_fid:
-        for i in range(iters_needed):
-            with torch.no_grad():
+        save_dir = f"./generated_samples/{Path(args.dataset).stem}_epoch{args.epoch_id}"
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        n_files_already_generated = len(glob(f"{save_dir}/*.jpg"))
+        if not n_files_already_generated >= 50000:
+            for i in tqdm(range(n_files_already_generated, 50000, args.batch_size)):
                 x_t_1 = torch.randn(args.batch_size, args.num_channels, args.image_size, args.image_size).to(device)
                 fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
 
                 fake_sample = to_range_0_1(fake_sample)
                 for j, x in enumerate(fake_sample):
                     index = i * args.batch_size + j
-                    torchvision.utils.save_image(x, "./generated_samples/{}/{}.jpg".format(args.dataset, index))
-                print("generating batch ", i)
-
+                    torchvision.utils.save_image(x, f"{save_dir}/{index}.jpg")
         paths = [save_dir, real_img_dir]
-
-        kwargs = {"batch_size": 100, "device": device, "dims": 2048}
+        kwargs = {"batch_size": 100, "device": device, "dims": 2048, "resize": args.image_size}
         fid = calculate_fid_given_paths(paths=paths, **kwargs)
         print("FID = {}".format(fid))
+        with open(ckpt_path.replace(".pth", "_fid.txt"), "w") as f:
+            f.write(f"{fid}\n")
     else:
         imgs = []
-        for _ in range(0, args.n_samples, args.batch_size):
+        for _ in tqdm(range(0, args.n_samples, args.batch_size)):
             x_t_1 = torch.randn(args.batch_size, args.num_channels, args.image_size, args.image_size).to(device)
             fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
             fake_sample = to_range_0_1(fake_sample)

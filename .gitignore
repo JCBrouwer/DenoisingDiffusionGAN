@@ -1,5 +1,6 @@
 *.beton
 .vscode/
+generated_samples/
 
 # Node artifact files
 node_modules/

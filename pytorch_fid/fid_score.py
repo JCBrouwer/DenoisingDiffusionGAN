@@ -128,7 +128,7 @@ def get_activations(files, model, batch_size=50, dims=2048, device="cpu", resize
 
     if resize > 0:
         print("Resized to ({}, {})".format(resize, resize))
-        dataset = ImagePathDataset(files, transforms=TF.Compose([TF.Resize(size=(resize, resize)), TF.ToTensor()]))
+        dataset = ImagePathDataset(files, transforms=TF.Compose([TF.Resize(size=(resize, resize)), TF.CenterCrop(resize), TF.ToTensor()]))
     else:
         dataset = ImagePathDataset(files, transforms=TF.ToTensor())
     dataloader = torch.utils.data.DataLoader(
