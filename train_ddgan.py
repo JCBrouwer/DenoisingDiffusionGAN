@@ -46,7 +46,7 @@ def broadcast_params(params):
 
 #%% Diffusion coefficients
 def var_func_vp(t, beta_min, beta_max):
-    log_mean_coeff = -0.25 * t**2 * (beta_max - beta_min) - 0.5 * t * beta_min
+    log_mean_coeff = -0.25 * t ** 2 * (beta_max - beta_min) - 0.5 * t * beta_min
     var = 1.0 - torch.exp(2.0 * log_mean_coeff)
     return var
 
@@ -92,7 +92,7 @@ def get_sigma_schedule(args, device):
     first = torch.tensor(1e-8)
     betas = torch.cat((first[None], betas)).to(device)
     betas = betas.type(torch.float32)
-    sigmas = betas**0.5
+    sigmas = betas ** 0.5
     a_s = torch.sqrt(1 - betas)
     return sigmas, a_s, betas
 
@@ -102,7 +102,7 @@ class Diffusion_Coefficients:
 
         self.sigmas, self.a_s, _ = get_sigma_schedule(args, device=device)
         self.a_s_cum = np.cumprod(self.a_s.cpu())
-        self.sigmas_cum = np.sqrt(1 - self.a_s_cum**2)
+        self.sigmas_cum = np.sqrt(1 - self.a_s_cum ** 2)
         self.a_s_prev = self.a_s.clone()
         self.a_s_prev[-1] = 1
 

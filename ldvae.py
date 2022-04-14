@@ -426,7 +426,7 @@ class DiagonalGaussianDistribution(object):
 
 
 configs = {
-    4: dict(
+    4: dict(  # https://ommer-lab.com/files/latent-diffusion/kl-f4.zip
         embed_dim=3,
         z_channels=3,
         resolution=256,
@@ -438,7 +438,7 @@ configs = {
         attn_resolutions=[],
         dropout=0.0,
     ),
-    8: dict(
+    8: dict(  # https://ommer-lab.com/files/latent-diffusion/kl-f8.zip
         embed_dim=4,
         z_channels=4,
         resolution=256,
@@ -450,7 +450,7 @@ configs = {
         attn_resolutions=[],
         dropout=0.0,
     ),
-    16: dict(
+    16: dict(  # https://ommer-lab.com/files/latent-diffusion/kl-f16.zip
         embed_dim=16,
         z_channels=16,
         resolution=256,
@@ -462,7 +462,7 @@ configs = {
         attn_resolutions=[16],
         dropout=0.0,
     ),
-    32: dict(
+    32: dict(  # https://ommer-lab.com/files/latent-diffusion/kl-f32.zip
         embed_dim=64,
         z_channels=64,
         resolution=256,
@@ -560,52 +560,3 @@ class AutoencoderKL(torch.nn.Module):
         x = conv2d(x, weight=self.colorize)
         x = 2.0 * (x - x.min()) / (x.max() - x.min()) - 1.0
         return x
-
-
-# https://ommer-lab.com/files/latent-diffusion/kl-f4.zip
-# https://ommer-lab.com/files/latent-diffusion/kl-f8.zip
-# https://ommer-lab.com/files/latent-diffusion/kl-f16.zip
-# https://ommer-lab.com/files/latent-diffusion/kl-f32.zip
-
-
-@torch.inference_mode()
-def encode_dataset(dataset):
-    import torch
-    import torchvision as tv
-    from ffcv.fields.decoders import SimpleRGBImageDecoder
-    from ffcv.loader import Loader, OrderOption
-    from ffcv.transforms import ToTensor, ToTorchImage
-
-    from ldvae import AutoencoderKL, configs
-
-    f = 32
-    checkpoint_file = f"kl-f{f}.ckpt"
-    ae_model = AutoencoderKL(**configs[f], ckpt_path=checkpoint_file).eval().requires_grad_(False).cuda()
-    encoded = ae_model.encode(torch.rand((3, 3, 1024, 1024), device="cuda") * 2 - 1).sample()
-    print(encoded.shape)
-    exit()
-
-    class ToFloat(torch.nn.Module):
-        def forward(self, x):
-            return x.float().cuda()
-
-    loader = Loader(
-        fname="denoising_ffcv_dataset.beton",
-        batch_size=8,
-        num_workers=24,
-        os_cache=True,
-        order=OrderOption.QUASI_RANDOM,
-        pipelines={
-            "image": [
-                SimpleRGBImageDecoder(),
-                ToTensor(),
-                ToTorchImage(),
-                ToFloat(),
-                tv.transforms.Normalize([127.5] * 3, [127.5] * 3),
-            ]
-        },
-    )
-
-
-if __name__ == "__main__":
-    encode_dataset(None)
