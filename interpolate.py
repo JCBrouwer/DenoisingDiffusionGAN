@@ -35,7 +35,7 @@ def gaussian_filter(x, sigma, mode="circular"):
     channels = x.shape[1]
 
     kernel = torch.arange(-radius, radius + 1, dtype=torch.float32, device=x.device)
-    kernel = torch.exp(-0.5 / sigma**2 * kernel**2)
+    kernel = torch.exp(-0.5 / sigma ** 2 * kernel ** 2)
     kernel = kernel / kernel.sum()
     kernel = kernel.view(1, 1, len(kernel)).repeat(channels, 1, 1)
 
@@ -95,7 +95,7 @@ def interpolate(
     **kwargs,
 ):
     if seed is None:
-        seed = np.random.randint(0, 2**16)
+        seed = np.random.randint(0, 2 ** 16)
     torch.manual_seed(seed)
     np.random.seed(seed)
 
