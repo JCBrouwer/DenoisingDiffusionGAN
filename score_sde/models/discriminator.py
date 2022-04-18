@@ -171,7 +171,7 @@ class Discriminator_large(nn.Module):
 
         self.conv4 = DownConvBlock(ngf * 8, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
         self.conv5 = DownConvBlock(ngf * 8, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
-        self.conv6 = DownConvBlock(ngf * 8, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
+        # self.conv6 = DownConvBlock(ngf * 8, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
 
         self.final_conv = conv2d(ngf * 8 + 1, ngf * 8, 3, padding=1)
         self.end_linear = dense(ngf * 8, 1)
@@ -191,9 +191,9 @@ class Discriminator_large(nn.Module):
 
         h = self.conv3(h, t_embed)
         h = self.conv4(h, t_embed)
-        h = self.conv5(h, t_embed)
+        out = self.conv5(h, t_embed)
 
-        out = self.conv6(h, t_embed)
+        # out = self.conv6(h, t_embed)
 
         batch, channel, height, width = out.shape
         group = min(batch, self.stddev_group)

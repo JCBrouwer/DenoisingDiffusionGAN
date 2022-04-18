@@ -3,8 +3,6 @@ import os
 import shutil
 from glob import glob
 from pathlib import Path
-from queue import Queue
-from threading import Thread
 
 import numpy as np
 import PIL
@@ -19,7 +17,7 @@ from numpy.random import RandomState
 from torch import distributed as dist
 from torch import nn, optim
 from torch.multiprocessing import Process
-from torch.nn.functional import softplus
+from torch.nn.functional import interpolate, softplus
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
@@ -245,7 +243,7 @@ def sample_from_model(coefficients, generator, n_time, x_init, nz, latents=None)
             if latents is None:
                 latent_z = torch.randn(len(x), nz, device=x.device)
             else:
-                latent_z = latent_z[:, i]
+                latent_z = latents[:, i]
 
             x_0 = generator(x, t, latent_z)
             x_new = sample_posterior(coefficients, x_0, x, t)
@@ -314,8 +312,10 @@ def train(rank, gpu, args):
     else:
         init_iteration = 0
 
-    with tqdm(range(init_iteration, args.kimg * 1000, bs), "Training latent diffusion GAN...") as pbar:
-        for iteration in enumerate(pbar):
+    with tqdm(
+        range(init_iteration, args.kimg * 1000, bs), desc="Training latent diffusion GAN...", unit_scale=bs, unit="img"
+    ) as pbar:
+        for iteration in pbar:
             x = next(train_loader)[0]
 
             # D STEP
@@ -330,7 +330,7 @@ def train(rank, gpu, args):
             t = torch.randint(0, n_t, (real_data.size(0),), device=device)
 
             x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
-            if args.lazy_reg is None or iteration % args.lazy_reg == 0:
+            if args.lazy_reg is None or iteration % (bs * args.lazy_reg) == 0:
                 x_t.requires_grad = True
 
             # train with real
@@ -340,7 +340,7 @@ def train(rank, gpu, args):
             errD_real = errD_real.mean()
             errD_real.backward(retain_graph=True)
 
-            if args.lazy_reg is None or iteration % args.lazy_reg == 0:
+            if args.lazy_reg is None or iteration % (bs * args.lazy_reg) == 0:
                 grad_real = torch.autograd.grad(outputs=D_real.sum(), inputs=x_t, create_graph=True)[0]
                 grad_penalty = (grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2).mean()
                 grad_penalty = args.r1_gamma / 2 * grad_penalty
@@ -392,22 +392,24 @@ def train(rank, gpu, args):
 
             if rank == 0 and iteration % (args.save_image_every * 1000) < bs:
                 with torch.inference_mode():
-                    x_t_1 = torch.from_numpy(RandomState(42).randn((16 * 9, n_c, im_size, im_size)))
-                    z = torch.from_numpy(RandomState(42).randn((16 * 9, n_t, n_z)))
+                    x_t_1 = torch.from_numpy(RandomState(42).randn(16 * 9, n_c, im_size, im_size)).float()
+                    z = torch.from_numpy(RandomState(42).randn(16 * 9, n_t, n_z)).float()
 
-                    autoencoder = VAE()
+                    autoencoder = VAE().cuda()
 
                     imgs = []
                     for b in range(0, 16 * 9, bs):
-                        fake_sample = sample_from_model(
+                        samples = sample_from_model(
                             pos_coeff, netG, n_t, x_t_1[b : b + bs].to(device), n_z, z[b : b + bs].to(device)
                         )
-                        fake_imgs = autoencoder.decode(fake_sample.cpu())
-                        imgs.append(fake_imgs)
-
+                        for sample in samples:
+                            imgs.append(autoencoder.decode(sample.unsqueeze(0)).cpu())
+                    imgs = torch.cat(imgs)
+                    if args.image_size * 32 > 512:
+                        imgs = interpolate(imgs, (512, 512), mode="bilinear", align_corners=True)
                     tv.utils.save_image(
-                        torch.cat(imgs),
-                        f"{exp_path}/samples_{Path(args.dataset).stem}_kimg{round(iteration / 1000)}.png",
+                        imgs,
+                        f"{exp_path}/samples_{Path(args.dataset).stem}_kimg{round(iteration / 1000)}.jpg",
                         nrow=16,
                         normalize=True,
                     )
