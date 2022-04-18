@@ -103,13 +103,9 @@ class Discriminator_small(nn.Module):
         # Encoding layers where the resolution decreases
         self.start_conv = conv2d(nc, ngf * 2, 1, padding=0)
         self.conv1 = DownConvBlock(ngf * 2, ngf * 2, t_emb_dim=t_emb_dim, act=act)
-
         self.conv2 = DownConvBlock(ngf * 2, ngf * 4, t_emb_dim=t_emb_dim, downsample=True, act=act)
-
         self.conv3 = DownConvBlock(ngf * 4, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
-
         self.conv4 = DownConvBlock(ngf * 8, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
-
         self.final_conv = conv2d(ngf * 8 + 1, ngf * 8, 3, padding=1, init_scale=0.0)
         self.end_linear = dense(ngf * 8, 1)
 
@@ -123,11 +119,8 @@ class Discriminator_small(nn.Module):
 
         h0 = self.start_conv(input_x)
         h1 = self.conv1(h0, t_embed)
-
         h2 = self.conv2(h1, t_embed)
-
         h3 = self.conv3(h2, t_embed)
-
         out = self.conv4(h3, t_embed)
 
         batch, channel, height, width = out.shape
@@ -164,15 +157,11 @@ class Discriminator_large(nn.Module):
 
         self.start_conv = conv2d(nc, ngf * 2, 1, padding=0)
         self.conv1 = DownConvBlock(ngf * 2, ngf * 4, t_emb_dim=t_emb_dim, downsample=True, act=act)
-
         self.conv2 = DownConvBlock(ngf * 4, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
-
         self.conv3 = DownConvBlock(ngf * 8, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
-
         self.conv4 = DownConvBlock(ngf * 8, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
         self.conv5 = DownConvBlock(ngf * 8, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
-        # self.conv6 = DownConvBlock(ngf * 8, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
-
+        self.conv6 = DownConvBlock(ngf * 8, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
         self.final_conv = conv2d(ngf * 8 + 1, ngf * 8, 3, padding=1)
         self.end_linear = dense(ngf * 8, 1)
 
@@ -186,14 +175,11 @@ class Discriminator_large(nn.Module):
 
         h = self.start_conv(input_x)
         h = self.conv1(h, t_embed)
-
         h = self.conv2(h, t_embed)
-
         h = self.conv3(h, t_embed)
         h = self.conv4(h, t_embed)
-        out = self.conv5(h, t_embed)
-
-        # out = self.conv6(h, t_embed)
+        h = self.conv5(h, t_embed)
+        out = self.conv6(h, t_embed)
 
         batch, channel, height, width = out.shape
         group = min(batch, self.stddev_group)

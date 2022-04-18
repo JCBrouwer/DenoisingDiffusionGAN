@@ -72,7 +72,9 @@ def interpolate(
     batch_size,
     # interpolation settings
     seed,
+    interp_seeds,
     n_frames,
+    overscaling,
     fps,
     n_interps,
     video_init,
@@ -126,21 +128,36 @@ def interpolate(
     else:
         video = None
 
-    for i in range(n_interps):
-        init_noise = np.random.RandomState(seed + i + 1).randn(n_frames, num_channels, image_size, image_size)
+    for j in range(n_interps):
+        if interp_seeds is None:
+            latents = np.random.RandomState(seed + j).randn(n_frames, num_timesteps, nz)
+            latents = torch.from_numpy(latents).float()
+        else:
+            latent_selection = [np.random.RandomState(s).randn(1, num_timesteps, nz) for s in interp_seeds]
+            latent_selection = torch.cat([torch.from_numpy(l).float() for l in latent_selection])
+            latents = spline_loop(latent_selection, n_frames)
+        if n_frames > 1:
+            latents = gaussian_filter(latents.cuda(), latent_smooth)
+            latents /= latents.square().mean().sqrt()
+            latents = latents.cpu()
+
+        init_noise = np.random.RandomState(seed + j + 1).randn(
+            n_frames, num_channels, round(image_size * overscaling), round(image_size * overscaling)
+        )
         init_noise = torch.from_numpy(init_noise).float()
-        init_noise = gaussian_filter(init_noise, init_noise_smooth)
-        init_noise /= init_noise.square().mean().sqrt()
+        if n_frames > 1:
+            init_noise = gaussian_filter(init_noise.cuda(), init_noise_smooth)
+            init_noise /= init_noise.square().mean().sqrt()
+            init_noise = init_noise.cpu()
 
-        post_noise = np.random.RandomState(seed + i + 2).randn(n_frames, num_channels, image_size, image_size)
+        post_noise = np.random.RandomState(seed + j + 2).randn(
+            n_frames, num_channels, round(image_size * overscaling), round(image_size * overscaling)
+        )
         post_noise = torch.from_numpy(post_noise).float()
-        post_noise = gaussian_filter(post_noise, post_noise_smooth)
-        post_noise /= post_noise.square().mean().sqrt()
-
-        latents = np.random.RandomState(seed + i + 3).randn(n_frames, num_timesteps, nz)
-        latents = torch.from_numpy(latents).float()
-        latents = gaussian_filter(latents, latent_smooth)
-        latents /= latents.square().mean().sqrt()
+        if n_frames > 1:
+            post_noise = gaussian_filter(post_noise.cuda(), post_noise_smooth)
+            post_noise /= post_noise.square().mean().sqrt()
+            post_noise = post_noise.cpu()
 
         if video is None:
             init = init_noise
@@ -170,12 +187,18 @@ def interpolate(
 
             imgs.append(x_t.cpu())
 
-        task = f"{Path(video_init).stem}_transfer" if video_init is not None else "interpolation"
-        filename = (
-            f"{exp_path}/diffusionGAN_{task}_{Path(dataset).stem}_epoch{epoch_id}_seed{seed}_{str(uuid4())[:6]}.mp4"
-        )
-        output = torch.cat(imgs).permute(0, 2, 3, 1).add(1).div(2).mul(255).cpu()
-        torchvision.io.write_video(filename, output, fps=fps)
+        if n_frames > 1:
+            task = f"{Path(video_init).stem}_transfer" if video_init is not None else "interpolation"
+            filename = f"{exp_path}/diffusionGAN_{task}_{Path(dataset).stem}_epoch{epoch_id}_seed{seed + j}_{str(uuid4())[:6]}.mp4"
+            output = torch.cat(imgs).permute(0, 2, 3, 1).add(1).div(2).mul(255).cpu()
+            torchvision.io.write_video(filename, output, fps=fps, options={"crf": "10"})
+
+        else:
+            filename = (
+                f"{exp_path}/diffusionGAN_{Path(dataset).stem}_epoch{epoch_id}_seed{seed + j}_{str(uuid4())[:6]}.jpg"
+            )
+            output = imgs[0].squeeze().add(1).div(2).mul(255).round().byte().cpu()
+            torchvision.io.write_jpeg(output, filename, quality=95)
 
 
 if __name__ == "__main__":
@@ -233,5 +256,7 @@ if __name__ == "__main__":
     parser.add_argument("--init_noise_smooth", type=int, default=400, help="sigma of temporal gaussian filter for initial noise")
     parser.add_argument("--latent_smooth", type=int, default=50, help="sigma of temporal gaussian filter for latent vectors")
     parser.add_argument("--post_noise_smooth", type=int, default=200, help="sigma of temporal gaussian filter for posterior noise")
+    parser.add_argument("--interp_seeds", type=int, default=None, nargs="*", help="seeds for spline interpolation")
+    parser.add_argument("--overscaling", type=float, default=1, help="factor with which to increase image size (relative to training size)")
 
     interpolate(**vars(parser.parse_args()))

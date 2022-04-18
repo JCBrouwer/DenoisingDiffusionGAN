@@ -23,7 +23,7 @@ from tqdm import tqdm
 
 from EMA import EMA
 from ldvae import AutoencoderKL, configs
-from score_sde.models.discriminator import Discriminator_large
+from score_sde.models.discriminator import Discriminator_small
 from score_sde.models.ncsnpp_generator_adagn import NCSNpp
 
 _f = 32  # https://ommer-lab.com/files/latent-diffusion/kl-f32.zip
@@ -269,7 +269,7 @@ def train(rank, gpu, args):
     im_size = args.image_size
 
     netG = NCSNpp(args).to(device)
-    netD = Discriminator_large(nc=2 * n_c, ngf=args.ngf, t_emb_dim=args.t_emb_dim, act=nn.LeakyReLU(0.2)).to(device)
+    netD = Discriminator_small(nc=2 * n_c, ngf=args.ngf, t_emb_dim=args.t_emb_dim, act=nn.LeakyReLU(0.2)).to(device)
 
     # broadcast_params(netG.parameters())
     # broadcast_params(netD.parameters())

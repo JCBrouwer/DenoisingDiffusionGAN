@@ -276,19 +276,17 @@ class NCSNpp(nn.Module):
         # timestep/noise_level embedding; only for continuous training
         zemb = self.z_transform(z)
         modules = self.all_modules
+
         m_idx = 0
         if self.embedding_type == "fourier":
             # Gaussian Fourier features embeddings.
             used_sigmas = time_cond
             temb = modules[m_idx](torch.log(used_sigmas))
             m_idx += 1
-
         elif self.embedding_type == "positional":
             # Sinusoidal positional embeddings.
             timesteps = time_cond
-
             temb = layers.get_timestep_embedding(timesteps, self.nf)
-
         else:
             raise ValueError(f"embedding type {self.embedding_type} unknown.")
 
@@ -316,10 +314,9 @@ class NCSNpp(nn.Module):
             for i_block in range(self.num_res_blocks):
                 h = modules[m_idx](hs[-1], temb, zemb)
                 m_idx += 1
-                if h.shape[-1] in self.attn_resolutions:
+                if isinstance(modules[m_idx], layerspp.AttnBlockpp):
                     h = modules[m_idx](h)
                     m_idx += 1
-
                 hs.append(h)
 
             if i_level != self.num_resolutions - 1:
@@ -362,7 +359,7 @@ class NCSNpp(nn.Module):
                 h = modules[m_idx](torch.cat([h, hs.pop()], dim=1), temb, zemb)
                 m_idx += 1
 
-            if h.shape[-1] in self.attn_resolutions:
+            if isinstance(modules[m_idx], layerspp.AttnBlockpp):
                 h = modules[m_idx](h)
                 m_idx += 1
 
