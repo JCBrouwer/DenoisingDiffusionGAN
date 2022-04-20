@@ -105,7 +105,7 @@ def interpolate(
 
     netG = NCSNpp(argparse.Namespace(**{**locals(), **kwargs})).to(device)
 
-    parent_dir = f"/home/hans/modelzoo/dd_gan/{Path(dataset).stem}"
+    parent_dir = f"/home/hans/modelzoo/diffusionGAN/{Path(dataset).stem}"
     exp_path = os.path.join(parent_dir, exp)
     ckpt = torch.load(f"{exp_path}/netG_{epoch_id}.pth", map_location=device)
 
@@ -210,18 +210,18 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=None, help="seed used for initialization")
     parser.add_argument("--compute_fid", action="store_true", default=False, help="whether or not compute FID")
     parser.add_argument("--epoch_id", type=int, default=1000)
-    parser.add_argument("--num_channels", type=int, default=3, help="channel of image")
+    parser.add_argument("--num_channels", type=int, default=64, help="channel of image")
     parser.add_argument("--centered", action="store_false", default=True, help="-1,1 scale")
     parser.add_argument("--use_geometric", action="store_true", default=False)
     parser.add_argument("--beta_min", type=float, default=0.1, help="beta_min for diffusion")
     parser.add_argument("--beta_max", type=float, default=20.0, help="beta_max for diffusion")
 
     parser.add_argument("--num_channels_dae", type=int, default=128, help="number of initial channels in denosing model")
-    parser.add_argument("--n_mlp", type=int, default=3, help="number of mlp layers for z")
-    parser.add_argument("--ch_mult", nargs="+", type=int, help="channel multiplier")
+    parser.add_argument("--n_mlp", type=int, default=4, help="number of mlp layers for z")
+    parser.add_argument("--ch_mult", default=[1, 2, 2, 4], nargs="+", type=int, help="channel multiplier")
 
     parser.add_argument("--num_res_blocks", type=int, default=2, help="number of resnet blocks per scale")
-    parser.add_argument("--attn_resolutions", default=(16,), help="resolution of applying attention")
+    parser.add_argument("--attn_resolutions", default=[4, 8, 16, 32], type=int, nargs="*", help="resolution of applying attention")
     parser.add_argument("--dropout", type=float, default=0.0, help="drop-out rate")
     parser.add_argument("--resamp_with_conv", action="store_false", default=True, help="always up/down sampling with conv")
     parser.add_argument("--conditional", action="store_false", default=True, help="noise conditional")
@@ -235,7 +235,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--embedding_type", type=str, default="positional", choices=["positional", "fourier"], help="type of time embedding")
     parser.add_argument("--fourier_scale", type=float, default=16.0, help="scale of fourier transform")
-    parser.add_argument("--not_use_tanh", action="store_true", default=False)
+    parser.add_argument("--not_use_tanh", action="store_false", default=True)
 
     # generator and training
     parser.add_argument("--exp", default="experiment_cifar_default", help="name of experiment")

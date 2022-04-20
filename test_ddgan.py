@@ -150,7 +150,7 @@ def sample_and_test(args):
     to_range_0_1 = lambda x: (x + 1.0) / 2.0
 
     netG = NCSNpp(args).to(device)
-    parent_dir = f"/home/hans/modelzoo/dd_gan/{Path(args.dataset).stem}"
+    parent_dir = f"/home/hans/modelzoo/diffusionGAN/{Path(args.dataset).stem}"
     exp_path = os.path.join(parent_dir, args.exp)
     ckpt_path = f"{exp_path}/netG_{args.epoch_id}.pth"
     ckpt = torch.load(ckpt_path, map_location=device)

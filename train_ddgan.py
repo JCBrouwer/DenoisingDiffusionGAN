@@ -360,7 +360,7 @@ def train(rank, gpu, args):
     netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     exp = args.exp
-    parent_dir = f"/home/hans/modelzoo/dd_gan/{Path(args.dataset).stem}"
+    parent_dir = f"/home/hans/modelzoo/diffusionGAN/{Path(args.dataset).stem}"
 
     exp_path = os.path.join(parent_dir, exp)
     if rank == 0:

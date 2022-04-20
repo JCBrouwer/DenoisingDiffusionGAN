@@ -33,6 +33,7 @@ VAE = lambda: AutoencoderKL(**configs[_f], ckpt_path=f"kl-f{_f}.ckpt").eval().re
 @torch.inference_mode()
 def prepare_autoencoded_dataset(dataset, image_size, batch_size):
     files = sum([glob(f"{dataset}/*{ext}") for ext in tv.datasets.folder.IMG_EXTENSIONS], [])
+    np.random.shuffle(files)
     cache_path = f"{Path(dataset).stem}_ffcv_dataset.beton"
 
     class ToCudaFloat(torch.nn.Module):
@@ -60,6 +61,7 @@ def prepare_autoencoded_dataset(dataset, image_size, batch_size):
                 tv.transforms.Resize(image_size, antialias=True),
                 tv.transforms.CenterCrop(image_size),
                 tv.transforms.ToTensor(),
+                tv.transforms.Normalize([0.5] * 3, [0.5] * 3),
             ]
         )
 
@@ -72,9 +74,11 @@ def prepare_autoencoded_dataset(dataset, image_size, batch_size):
 
         autoencoder = VAE().cuda()
 
-        print()
         latims = []
-        for batch in tqdm(DataLoader(IntoAE(), batch_size=3), desc="Encoding images with VAE..."):
+        for batch in tqdm(
+            DataLoader(IntoAE(), batch_size=3, num_workers=torch.multiprocessing.cpu_count()),
+            desc="Encoding images with VAE...",
+        ):
             for img in autoencoder.encode(batch.cuda()).mode():
                 latims.append(img.unsqueeze(0).cpu().numpy())
 
@@ -474,9 +478,9 @@ if __name__ == "__main__":
 
     parser.add_argument("--num_channels_dae", type=int, default=128, help="number of initial channels in denosing model")
     parser.add_argument("--n_mlp", type=int, default=4, help="number of mlp layers for z")
-    parser.add_argument("--ch_mult", nargs="+", type=int, help="channel multiplier")
+    parser.add_argument("--ch_mult", default=[1, 2, 2, 4], nargs="+", type=int, help="channel multiplier")
     parser.add_argument("--num_res_blocks", type=int, default=2, help="number of resnet blocks per scale")
-    parser.add_argument("--attn_resolutions", default=(16,), help="resolution of applying attention")
+    parser.add_argument("--attn_resolutions", default=[4, 8, 16, 32], type=int, nargs="*", help="resolution of applying attention")
     parser.add_argument("--dropout", type=float, default=0.0, help="drop-out rate")
     parser.add_argument("--resamp_with_conv", action="store_false", default=True, help="always up/down sampling with conv")
     parser.add_argument("--conditional", action="store_false", default=True, help="noise conditional")
@@ -490,11 +494,11 @@ if __name__ == "__main__":
 
     parser.add_argument("--embedding_type", type=str, default="positional", choices=["positional", "fourier"], help="type of time embedding")
     parser.add_argument("--fourier_scale", type=float, default=16.0, help="scale of fourier transform")
-    parser.add_argument("--not_use_tanh", action="store_true", default=False)
+    parser.add_argument("--not_use_tanh", action="store_false", default=True)
 
     # generator and training
     parser.add_argument("--exp", default="experiment_cifar_default", help="name of experiment")
-    parser.add_argument("--exp_dir", default="/home/hans/modelzoo/dd_gan/", help="directory to save experiments in")
+    parser.add_argument("--exp_dir", default="/home/hans/modelzoo/diffusionGAN/", help="directory to save experiments in")
     parser.add_argument("--dataset", default="cifar10", help="name of dataset")
     parser.add_argument("--nz", type=int, default=100)
     parser.add_argument("--num_timesteps", type=int, default=4)
@@ -502,7 +506,7 @@ if __name__ == "__main__":
     parser.add_argument("--z_emb_dim", type=int, default=256)
     parser.add_argument("--t_emb_dim", type=int, default=256)
     parser.add_argument("--batch_size", type=int, default=64, help="input batch size")
-    parser.add_argument("--kimg", type=int, default=8000)
+    parser.add_argument("--kimg", type=int, default=16_000)
     parser.add_argument("--ngf", type=int, default=64)
 
     parser.add_argument("--lr_g", type=float, default=1.5e-4, help="learning rate g")
@@ -511,15 +515,15 @@ if __name__ == "__main__":
     parser.add_argument("--beta2", type=float, default=0.9, help="beta2 for adam")
     parser.add_argument("--no_lr_decay", action="store_true", default=False)
 
-    parser.add_argument("--use_ema", action="store_true", default=False, help="use EMA or not")
+    parser.add_argument("--use_ema", action="store_false", default=True, help="use EMA or not")
     parser.add_argument("--ema_decay", type=float, default=0.9999, help="decay rate for EMA")
 
-    parser.add_argument("--r1_gamma", type=float, default=0.05, help="coef for r1 reg")
-    parser.add_argument("--lazy_reg", type=int, default=None, help="lazy regularization")
+    parser.add_argument("--r1_gamma", type=float, default=0.08, help="coef for r1 reg")
+    parser.add_argument("--lazy_reg", type=int, default=12, help="lazy regularization")
 
-    parser.add_argument("--save_image_every", type=int, default=25, help="save image samples every x kimg")
-    parser.add_argument("--save_ckpt_every", type=int, default=100, help="save ckpt every x kimg")
-    parser.add_argument("--save_state_every", type=int, default=100, help="save full state for resuming every x kimg")
+    parser.add_argument("--save_image_every", type=int, default=100, help="save image samples every x kimg")
+    parser.add_argument("--save_ckpt_every", type=int, default=400, help="save ckpt every x kimg")
+    parser.add_argument("--save_state_every", type=int, default=400, help="save full state for resuming every x kimg")
 
     # ddp
     parser.add_argument("--num_proc_node", type=int, default=1, help="The number of nodes in multi node env.")
