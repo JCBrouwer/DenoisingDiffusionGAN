@@ -82,6 +82,8 @@ def interpolate(
     init_noise_smooth,
     latent_smooth,
     post_noise_smooth,
+    smooth_device,
+    init_video_smooth,
     # checkpoint settings
     image_size,
     num_channels,
@@ -119,9 +121,10 @@ def interpolate(
     post_log_var = C.posterior_log_variance_clipped
 
     if video_init is not None:
-        v = de.VideoReader(video_init, width=image_size, height=image_size)
+        v = de.VideoReader(video_init, width=round(image_size * overscaling), height=round(image_size * overscaling))
         fps = round(v.get_avg_fps())
         video = v[:].permute(0, 3, 1, 2).float().contiguous()
+        video = gaussian_filter(video.to(smooth_device), init_video_smooth)
         video -= video.mean()
         video /= video.std()
         n_frames = len(video)
@@ -137,7 +140,7 @@ def interpolate(
             latent_selection = torch.cat([torch.from_numpy(l).float() for l in latent_selection])
             latents = spline_loop(latent_selection, n_frames)
         if n_frames > 1:
-            latents = gaussian_filter(latents.cuda(), latent_smooth)
+            latents = gaussian_filter(latents.to(smooth_device), latent_smooth)
             latents /= latents.square().mean().sqrt()
             latents = latents.cpu()
 
@@ -146,7 +149,7 @@ def interpolate(
         )
         init_noise = torch.from_numpy(init_noise).float()
         if n_frames > 1:
-            init_noise = gaussian_filter(init_noise.cuda(), init_noise_smooth)
+            init_noise = gaussian_filter(init_noise.to(smooth_device), init_noise_smooth)
             init_noise /= init_noise.square().mean().sqrt()
             init_noise = init_noise.cpu()
 
@@ -155,7 +158,7 @@ def interpolate(
         )
         post_noise = torch.from_numpy(post_noise).float()
         if n_frames > 1:
-            post_noise = gaussian_filter(post_noise.cuda(), post_noise_smooth)
+            post_noise = gaussian_filter(post_noise.to(smooth_device), post_noise_smooth)
             post_noise /= post_noise.square().mean().sqrt()
             post_noise = post_noise.cpu()
 
@@ -258,5 +261,6 @@ if __name__ == "__main__":
     parser.add_argument("--post_noise_smooth", type=int, default=200, help="sigma of temporal gaussian filter for posterior noise")
     parser.add_argument("--interp_seeds", type=int, default=None, nargs="*", help="seeds for spline interpolation")
     parser.add_argument("--overscaling", type=float, default=1, help="factor with which to increase image size (relative to training size)")
-
+    parser.add_argument("--smooth_device", type=str, default="cuda", help="what device to perform smoothing on ('cpu' for long/large/high-sigma interpolations)")
+    parser.add_argument("--init_video_smooth", type=float, default=12, help="how much to smoothen initialization video")
     interpolate(**vars(parser.parse_args()))
