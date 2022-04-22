@@ -11,8 +11,7 @@ from torch.nn.functional import conv1d, interpolate, pad
 from torchcubicspline import NaturalCubicSpline, natural_cubic_spline_coeffs
 from tqdm import tqdm
 
-from score_sde.models.ncsnpp_generator_adagn import NCSNpp
-from test_ddgan import Posterior_Coefficients, extract
+from diffusionGAN import DiffusionGAN
 
 de.bridge.set_bridge("torch")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -88,37 +87,25 @@ def interpolate(
     image_size,
     num_channels,
     num_timesteps,
-    dataset,
-    exp,
     nz,
-    epoch_id,
-    # posterior settings
-    use_geometric,
-    beta_min,
-    beta_max,
-    **kwargs,
+    n_mlp,
+    ckpt,
+    out_dir,
 ):
     if seed is None:
         seed = np.random.randint(0, 2 ** 16)
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    netG = NCSNpp(argparse.Namespace(**{**locals(), **kwargs})).to(device)
-
-    parent_dir = f"/home/hans/modelzoo/diffusionGAN/{Path(dataset).stem}"
-    exp_path = os.path.join(parent_dir, exp)
-    ckpt = torch.load(f"{exp_path}/netG_{epoch_id}.pth", map_location=device)
-
-    # loading weights from ddp in single gpu
-    for key in list(ckpt.keys()):
-        ckpt[key[7:]] = ckpt.pop(key)
-    netG.load_state_dict(ckpt)
-    netG.eval()
-
-    C = Posterior_Coefficients(num_timesteps, beta_min, beta_max, use_geometric, device)
-    post_mu1 = C.posterior_mean_coef1
-    post_mu2 = C.posterior_mean_coef2
-    post_log_var = C.posterior_log_variance_clipped
+    G = DiffusionGAN(
+        ckpt=ckpt,
+        latent=True,
+        num_timesteps=num_timesteps,
+        image_size=image_size,
+        num_channels=num_channels,
+        nz=nz,
+        n_mlp=n_mlp,
+    ).to(device)
 
     if video_init is not None:
         v = de.VideoReader(video_init, width=round(image_size * overscaling), height=round(image_size * overscaling))
@@ -169,37 +156,20 @@ def interpolate(
 
         imgs = []
         for b in tqdm(range(0, n_frames, batch_size)):
-
             x_t = init[b : b + batch_size].to(device)
             p_n = post_noise[b : b + batch_size].to(device)
-
-            for i in reversed(range(num_timesteps)):
-                t = torch.full((len(x_t),), i, dtype=torch.int64, device=device)
-                z = latents[b : b + batch_size, i].to(device)
-
-                # get proposal image
-                x_0 = netG(x_t, t, z)
-
-                # weigh versus current image
-                x_t = extract(post_mu1, t, x_t.shape) * x_0 + extract(post_mu2, t, x_t.shape) * x_t
-
-                # add noise to proposal image for next step (unless there is no next step)
-                if i > 0:
-                    log_var = extract(post_log_var, t, x_t.shape)
-                    x_t += torch.exp(0.5 * log_var) * p_n
-
+            zs = latents[b : b + batch_size].to(device)
+            x_t = G(x_t, p_n, zs)
             imgs.append(x_t.cpu())
 
         if n_frames > 1:
             task = f"{Path(video_init).stem}_transfer" if video_init is not None else "interpolation"
-            filename = f"{exp_path}/diffusionGAN_{task}_{Path(dataset).stem}_epoch{epoch_id}_seed{seed + j}_{str(uuid4())[:6]}.mp4"
+            filename = f"{out_dir}/diffusionGAN_{task}_{Path(ckpt).stem}_seed{seed + j}_{str(uuid4())[:6]}.mp4"
             output = torch.cat(imgs).permute(0, 2, 3, 1).add(1).div(2).mul(255).cpu()
             torchvision.io.write_video(filename, output, fps=fps, options={"crf": "10"})
 
         else:
-            filename = (
-                f"{exp_path}/diffusionGAN_{Path(dataset).stem}_epoch{epoch_id}_seed{seed + j}_{str(uuid4())[:6]}.jpg"
-            )
+            filename = f"{out_dir}/{Path(ckpt).stem}_seed{seed + j}_{str(uuid4())[:6]}.jpg"
             output = imgs[0].squeeze().add(1).div(2).mul(255).round().byte().cpu()
             torchvision.io.write_jpeg(output, filename, quality=95)
 
@@ -207,60 +177,35 @@ def interpolate(
 if __name__ == "__main__":
     # fmt:off
     parser = argparse.ArgumentParser("ddgan parameters")
-    parser.add_argument("--seed", type=int, default=None, help="seed used for initialization")
-    parser.add_argument("--compute_fid", action="store_true", default=False, help="whether or not compute FID")
-    parser.add_argument("--epoch_id", type=int, default=1000)
-    parser.add_argument("--num_channels", type=int, default=64, help="channel of image")
-    parser.add_argument("--centered", action="store_false", default=True, help="-1,1 scale")
-    parser.add_argument("--use_geometric", action="store_true", default=False)
-    parser.add_argument("--beta_min", type=float, default=0.1, help="beta_min for diffusion")
-    parser.add_argument("--beta_max", type=float, default=20.0, help="beta_max for diffusion")
 
-    parser.add_argument("--num_channels_dae", type=int, default=128, help="number of initial channels in denosing model")
-    parser.add_argument("--n_mlp", type=int, default=4, help="number of mlp layers for z")
-    parser.add_argument("--ch_mult", default=[1, 2, 2, 4], nargs="+", type=int, help="channel multiplier")
-
-    parser.add_argument("--num_res_blocks", type=int, default=2, help="number of resnet blocks per scale")
-    parser.add_argument("--attn_resolutions", default=[4, 8, 16, 32], type=int, nargs="*", help="resolution of applying attention")
-    parser.add_argument("--dropout", type=float, default=0.0, help="drop-out rate")
-    parser.add_argument("--resamp_with_conv", action="store_false", default=True, help="always up/down sampling with conv")
-    parser.add_argument("--conditional", action="store_false", default=True, help="noise conditional")
-    parser.add_argument("--fir", action="store_false", default=True, help="FIR")
-    parser.add_argument("--fir_kernel", default=[1, 3, 3, 1], help="FIR kernel")
-    parser.add_argument("--skip_rescale", action="store_false", default=True, help="skip rescale")
-    parser.add_argument("--resblock_type", default="biggan", help="tyle of resnet block, choice in biggan and ddpm")
-    parser.add_argument("--progressive", type=str, default="none", choices=["none", "output_skip", "residual"], help="progressive type for output")
-    parser.add_argument("--progressive_input", type=str, default="residual", choices=["none", "input_skip", "residual"], help="progressive type for input")
-    parser.add_argument("--progressive_combine", type=str, default="sum", choices=["sum", "cat"], help="progressive combine method.")
-
-    parser.add_argument("--embedding_type", type=str, default="positional", choices=["positional", "fourier"], help="type of time embedding")
-    parser.add_argument("--fourier_scale", type=float, default=16.0, help="scale of fourier transform")
-    parser.add_argument("--not_use_tanh", action="store_false", default=True)
-
-    # generator and training
-    parser.add_argument("--exp", default="experiment_cifar_default", help="name of experiment")
-    parser.add_argument("--real_img_dir", default="./pytorch_fid/cifar10_train_stat.npy", help="directory to real images for FID computation")
-
-    parser.add_argument("--dataset", default="cifar10", help="name of dataset")
+    parser.add_argument("--ckpt", type=str)
+    
     parser.add_argument("--image_size", type=int, default=32, help="size of image")
-
+    parser.add_argument("--num_channels", type=int, default=64, help="channel of image")
     parser.add_argument("--nz", type=int, default=100)
     parser.add_argument("--num_timesteps", type=int, default=4)
-
-    parser.add_argument("--z_emb_dim", type=int, default=256)
-    parser.add_argument("--t_emb_dim", type=int, default=256)
     parser.add_argument("--batch_size", type=int, default=32, help="sample generating batch size")
+    parser.add_argument("--n_mlp", type=int, default=4, help="number of mlp layers for z")
+    # parser.add_argument("--ch_mult", default=[1, 2, 2, 4], nargs="+", type=int, help="channel multiplier")
+    # parser.add_argument("--num_channels_dae", type=int, default=128, help="number of initial channels in denosing model")
+    # parser.add_argument("--num_res_blocks", type=int, default=2, help="number of resnet blocks per scale")
+    # parser.add_argument("--attn_resolutions", default=[4, 8, 16, 32], type=int, nargs="*", help="resolution of applying attention")
+    # parser.add_argument("--not_use_tanh", action="store_false", default=True)
 
+    parser.add_argument("--seed", type=int, default=None, help="seed used for initialization")
     parser.add_argument("--n_frames", type=int, default=20*24, help="number of frames in each interpolation")
     parser.add_argument("--fps", type=float, default=24, help="frames per second in output video")
     parser.add_argument("--n_interps", type=int, default=1, help="number of interpolation videos to generate")
     parser.add_argument("--video_init", type=str, default=None, help="video to use as initialization")
     parser.add_argument("--var_scale", type=float, default=1., help="weight of init noise when video_init is used. lower values preserve content video more.")
-    parser.add_argument("--init_noise_smooth", type=int, default=400, help="sigma of temporal gaussian filter for initial noise")
-    parser.add_argument("--latent_smooth", type=int, default=50, help="sigma of temporal gaussian filter for latent vectors")
-    parser.add_argument("--post_noise_smooth", type=int, default=200, help="sigma of temporal gaussian filter for posterior noise")
+    parser.add_argument("--init_noise_smooth", type=int, default=96, help="sigma of temporal gaussian filter for initial noise")
+    parser.add_argument("--latent_smooth", type=int, default=24, help="sigma of temporal gaussian filter for latent vectors")
+    parser.add_argument("--post_noise_smooth", type=int, default=96, help="sigma of temporal gaussian filter for posterior noise")
     parser.add_argument("--interp_seeds", type=int, default=None, nargs="*", help="seeds for spline interpolation")
     parser.add_argument("--overscaling", type=float, default=1, help="factor with which to increase image size (relative to training size)")
     parser.add_argument("--smooth_device", type=str, default="cuda", help="what device to perform smoothing on ('cpu' for long/large/high-sigma interpolations)")
     parser.add_argument("--init_video_smooth", type=float, default=12, help="how much to smoothen initialization video")
+
+    parser.add_argument("--out_dir", type=str, default='/home/hans/modelzoo/diffusionGAN/')
+
     interpolate(**vars(parser.parse_args()))

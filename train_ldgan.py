@@ -272,7 +272,30 @@ def train(rank, gpu, args):
     n_z = args.nz  # latent dimension
     im_size = args.image_size
 
-    netG = NCSNpp(args).to(device)
+    netG = NCSNpp(
+        image_size=args.image_size,
+        num_channels=args.num_channels,
+        nz=args.nz,
+        z_emb_dim=args.z_emb_dim,
+        n_mlp=args.n_mlp,
+        num_channels_dae=args.num_channels_dae,
+        ch_mult=args.ch_mult,
+        num_res_blocks=args.num_res_blocks,
+        attn_resolutions=args.attn_resolutions,
+        not_use_tanh=args.not_use_tanh,
+        dropout=args.dropout,
+        resamp_with_conv=args.resamp_with_conv,
+        conditional=args.conditional,
+        fir=args.fir,
+        fir_kernel=args.fir_kernel,
+        skip_rescale=args.skip_rescale,
+        resblock_type=args.resblock_type,
+        progressive=args.progressive,
+        progressive_input=args.progressive_input,
+        progressive_combine=args.progressive_combine,
+        embedding_type=args.embedding_type,
+        fourier_scale=args.fourier_scale,
+    ).to(device)
     netD = Discriminator_small(nc=2 * n_c, ngf=args.ngf, t_emb_dim=args.t_emb_dim, act=nn.LeakyReLU(0.2)).to(device)
 
     # broadcast_params(netG.parameters())
@@ -303,7 +326,7 @@ def train(rank, gpu, args):
             shutil.copytree("score_sde/models", os.path.join(exp_path, "score_sde/models"))
 
     if args.resume:
-        checkpoint_file = os.path.join(exp_path, "state.pth")
+        checkpoint_file = os.path.join(exp_path, "resume_state.pth")
         checkpoint = torch.load(checkpoint_file, map_location=device)
         init_iteration = checkpoint["nimgs"]
         netG.load_state_dict(checkpoint["netG_dict"])
@@ -395,6 +418,8 @@ def train(rank, gpu, args):
                 )
 
             if rank == 0 and iteration % (args.save_image_every * 1000) < bs:
+                if args.use_ema:
+                    optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
                 with torch.inference_mode():
                     x_t_1 = torch.from_numpy(RandomState(42).randn(16 * 9, n_c, im_size, im_size)).float()
                     z = torch.from_numpy(RandomState(42).randn(16 * 9, n_t, n_z)).float()
@@ -419,6 +444,8 @@ def train(rank, gpu, args):
                     )
 
                     del autoencoder
+                if args.use_ema:
+                    optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
 
             if rank == 0 and iteration % (args.save_ckpt_every * 1000) < bs:
                 if args.use_ema:

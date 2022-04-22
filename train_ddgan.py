@@ -331,7 +331,30 @@ def train(rank, gpu, args):
             drop_last=True,
         )
 
-    netG = NCSNpp(args).to(device)
+    netG = NCSNpp(
+        image_size=args.image_size,
+        num_channels=args.num_channels,
+        nz=args.nz,
+        z_emb_dim=args.z_emb_dim,
+        n_mlp=args.n_mlp,
+        num_channels_dae=args.num_channels_dae,
+        ch_mult=args.ch_mult,
+        num_res_blocks=args.num_res_blocks,
+        attn_resolutions=args.attn_resolutions,
+        not_use_tanh=args.not_use_tanh,
+        dropout=args.dropout,
+        resamp_with_conv=args.resamp_with_conv,
+        conditional=args.conditional,
+        fir=args.fir,
+        fir_kernel=args.fir_kernel,
+        skip_rescale=args.skip_rescale,
+        resblock_type=args.resblock_type,
+        progressive=args.progressive,
+        progressive_input=args.progressive_input,
+        progressive_combine=args.progressive_combine,
+        embedding_type=args.embedding_type,
+        fourier_scale=args.fourier_scale,
+    ).to(device)
 
     if args.dataset == "cifar10" or args.dataset == "stackmnist":
         netD = Discriminator_small(
