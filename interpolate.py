@@ -91,6 +91,7 @@ def interpolate(
     n_mlp,
     ckpt,
     out_dir,
+    **model_kwargs
 ):
     if seed is None:
         seed = np.random.randint(0, 2 ** 16)
@@ -105,6 +106,7 @@ def interpolate(
         num_channels=num_channels,
         nz=nz,
         n_mlp=n_mlp,
+        **model_kwargs,
     ).to(device)
 
     if video_init is not None:
@@ -179,18 +181,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("ddgan parameters")
 
     parser.add_argument("--ckpt", type=str)
-    
+
     parser.add_argument("--image_size", type=int, default=32, help="size of image")
     parser.add_argument("--num_channels", type=int, default=64, help="channel of image")
     parser.add_argument("--nz", type=int, default=100)
     parser.add_argument("--num_timesteps", type=int, default=4)
     parser.add_argument("--batch_size", type=int, default=32, help="sample generating batch size")
     parser.add_argument("--n_mlp", type=int, default=4, help="number of mlp layers for z")
-    # parser.add_argument("--ch_mult", default=[1, 2, 2, 4], nargs="+", type=int, help="channel multiplier")
-    # parser.add_argument("--num_channels_dae", type=int, default=128, help="number of initial channels in denosing model")
-    # parser.add_argument("--num_res_blocks", type=int, default=2, help="number of resnet blocks per scale")
-    # parser.add_argument("--attn_resolutions", default=[4, 8, 16, 32], type=int, nargs="*", help="resolution of applying attention")
-    # parser.add_argument("--not_use_tanh", action="store_false", default=True)
+    parser.add_argument("--ch_mult", default=[1, 2, 2, 4], nargs="+", type=int, help="channel multiplier")
+    parser.add_argument("--num_channels_dae", type=int, default=128, help="number of initial channels in denosing model")
+    parser.add_argument("--num_res_blocks", type=int, default=2, help="number of resnet blocks per scale")
+    parser.add_argument("--attn_resolutions", default=[4, 8, 16, 32], type=int, nargs="*", help="resolution of applying attention")
+    parser.add_argument("--not_use_tanh", action="store_false", default=True)
 
     parser.add_argument("--seed", type=int, default=None, help="seed used for initialization")
     parser.add_argument("--n_frames", type=int, default=20*24, help="number of frames in each interpolation")

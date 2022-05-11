@@ -26,8 +26,9 @@ from ldvae import AutoencoderKL, configs
 from score_sde.models.discriminator import Discriminator_small
 from score_sde.models.ncsnpp_generator_adagn import NCSNpp
 
-_f = 32  # https://ommer-lab.com/files/latent-diffusion/kl-f32.zip
-VAE = lambda: AutoencoderKL(**configs[_f], ckpt_path=f"kl-f{_f}.ckpt").eval().requires_grad_(False)
+_F = 16  # https://ommer-lab.com/files/latent-diffusion/kl-f32.zip
+VAE = lambda: AutoencoderKL(**configs[_F], ckpt_path=f"kl-f{_F}.ckpt").eval().requires_grad_(False)
+_C = {32: 64, 16: 16, 8: 4, 4: 3}
 
 
 @torch.inference_mode()
@@ -90,7 +91,9 @@ def prepare_autoencoded_dataset(dataset, image_size, batch_size):
                 return latims[idx]
 
         print("Preprocessing latent images into FFCV dataset...")
-        pipelines = {"image": NDArrayField(shape=(64, image_size // 32, image_size // 32), dtype=np.dtype("float32"))}
+        pipelines = {
+            "image": NDArrayField(shape=(_C[_F], image_size // _F, image_size // _F), dtype=np.dtype("float32"))
+        }
         DatasetWriter(cache_path, pipelines).from_indexed_dataset(IntoFFCV())
         print("Done!\n")
 
@@ -263,8 +266,8 @@ def train(rank, gpu, args):
     device = torch.device(f"cuda:{gpu}")
 
     train_loader = prepare_autoencoded_dataset(args.dataset, args.image_size, args.batch_size)
-    args.image_size = args.image_size // 32  # VAE reduces image_size by a factor of 32
-    args.num_channels = 64
+    args.image_size = args.image_size // _F  # VAE reduces image_size by a factor of F
+    args.num_channels = _C[_F]
 
     bs = args.batch_size
     n_t = args.num_timesteps
@@ -507,7 +510,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_mlp", type=int, default=4, help="number of mlp layers for z")
     parser.add_argument("--ch_mult", default=[1, 2, 2, 4], nargs="+", type=int, help="channel multiplier")
     parser.add_argument("--num_res_blocks", type=int, default=2, help="number of resnet blocks per scale")
-    parser.add_argument("--attn_resolutions", default=[4, 8, 16, 32], type=int, nargs="*", help="resolution of applying attention")
+    parser.add_argument("--attn_resolutions", default=[16], type=int, nargs="*", help="resolution of applying attention")
     parser.add_argument("--dropout", type=float, default=0.0, help="drop-out rate")
     parser.add_argument("--resamp_with_conv", action="store_false", default=True, help="always up/down sampling with conv")
     parser.add_argument("--conditional", action="store_false", default=True, help="noise conditional")
@@ -533,7 +536,7 @@ if __name__ == "__main__":
     parser.add_argument("--z_emb_dim", type=int, default=256)
     parser.add_argument("--t_emb_dim", type=int, default=256)
     parser.add_argument("--batch_size", type=int, default=64, help="input batch size")
-    parser.add_argument("--kimg", type=int, default=16_000)
+    parser.add_argument("--kimg", type=int, default=64_000)
     parser.add_argument("--ngf", type=int, default=64)
 
     parser.add_argument("--lr_g", type=float, default=1.5e-4, help="learning rate g")
