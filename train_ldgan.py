@@ -1,6 +1,7 @@
 import argparse
 import os
 import shutil
+import sys
 from glob import glob
 from pathlib import Path
 
@@ -17,28 +18,57 @@ from numpy.random import RandomState
 from torch import distributed as dist
 from torch import nn, optim
 from torch.multiprocessing import Process
-from torch.nn.functional import interpolate, softplus
+from torch.nn.functional import interpolate, pixel_shuffle, pixel_unshuffle, softplus
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from EMA import EMA
 from ldvae import AutoencoderKL, configs
-from score_sde.models.discriminator import Discriminator_small
+from score_sde.models.discriminator import Discriminator_large, Discriminator_small
 from score_sde.models.ncsnpp_generator_adagn import NCSNpp
+
+sys.path.append("optimizers/shampoo")
+from shampoo import Shampoo
+from shampoo_utils import GraftingType
 
 _F = 16  # https://ommer-lab.com/files/latent-diffusion/kl-f32.zip
 VAE = lambda: AutoencoderKL(**configs[_F], ckpt_path=f"kl-f{_F}.ckpt").eval().requires_grad_(False)
 _C = {32: 64, 16: 16, 8: 4, 4: 3}
 
 
+class ModeWrap:
+    def __init__(self, x) -> None:
+        self.x = x
+
+    def mode(self):
+        return self.x
+
+
+class PixelShuffler(torch.nn.Module):
+    def __init__(self, r) -> None:
+        super().__init__()
+        self.r = r
+
+    def encode(self, x):
+        return ModeWrap(pixel_unshuffle(x, self.r))
+
+    def decode(self, x):
+        return pixel_shuffle(x, self.r)
+
+
 @torch.inference_mode()
-def prepare_autoencoded_dataset(dataset, image_size, batch_size):
+def prepare_autoencoded_dataset(dataset, image_size, batch_size, new_shape):
     files = sum([glob(f"{dataset}/*{ext}") for ext in tv.datasets.folder.IMG_EXTENSIONS], [])
     np.random.shuffle(files)
-    cache_path = f"{Path(dataset).stem}_ffcv_dataset.beton"
+    cache_path = f"/HDDs/{Path(dataset).stem}_ffcv_dataset.beton"
+
+    uint8 = isinstance(VAE(), PixelShuffler)
 
     class ToCudaFloat(torch.nn.Module):
         def forward(self, x):
+            x = x.float()
+            if uint8:
+                x = x.div(127.5).sub(1)
             return x.float().cuda()
 
     construct_loader = lambda: Loader(
@@ -57,43 +87,66 @@ def prepare_autoencoded_dataset(dataset, image_size, batch_size):
         rebuild = True
 
     if rebuild:
-        transforms = tv.transforms.Compose(
-            [
-                tv.transforms.Resize(image_size, antialias=True),
-                tv.transforms.CenterCrop(image_size),
-                tv.transforms.ToTensor(),
-                tv.transforms.Normalize([0.5] * 3, [0.5] * 3),
-            ]
-        )
 
-        class IntoAE(Dataset):
-            def __len__(self):
-                return len(files)
+        autoencoder = VAE()
 
-            def __getitem__(self, idx):
-                return transforms(PIL.Image.open(files[idx]).convert("RGB"))
+        if isinstance(autoencoder, PixelShuffler):
+            transforms = tv.transforms.Compose(
+                [tv.transforms.Resize(image_size, antialias=True), tv.transforms.CenterCrop(image_size)]
+            )
 
-        autoencoder = VAE().cuda()
+            class IntoFFCV(Dataset):
+                def __len__(self):
+                    return len(files)
 
-        latims = []
-        for batch in tqdm(
-            DataLoader(IntoAE(), batch_size=3, num_workers=torch.multiprocessing.cpu_count()),
-            desc="Encoding images with VAE...",
-        ):
-            for img in autoencoder.encode(batch.cuda()).mode():
-                latims.append(img.unsqueeze(0).cpu().numpy())
+                def __getitem__(self, idx):
+                    im = PIL.Image.open(files[idx]).convert("RGB")
+                    im = torch.from_numpy(np.asarray(transforms(im))).permute(2, 0, 1).unsqueeze(0)
+                    im = autoencoder.encode(im).mode()
+                    return im.numpy().astype(np.uint8)
 
-        class IntoFFCV(Dataset):
-            def __len__(self):
-                return len(latims)
+            dtype = np.dtype("uint8")
+            uint8 = True
 
-            def __getitem__(self, idx):
-                return latims[idx]
+        else:
+            transforms = tv.transforms.Compose(
+                [
+                    tv.transforms.Resize(image_size, antialias=True),
+                    tv.transforms.CenterCrop(image_size),
+                    tv.transforms.ToTensor(),
+                    tv.transforms.Normalize([0.5] * 3, [0.5] * 3),
+                ]
+            )
+
+            class IntoAE(Dataset):
+                def __len__(self):
+                    return len(files)
+
+                def __getitem__(self, idx):
+                    return transforms(PIL.Image.open(files[idx]).convert("RGB"))
+
+            autoencoder = autoencoder.cuda()
+
+            latims = []
+            for batch in tqdm(
+                DataLoader(IntoAE(), batch_size=3, num_workers=torch.multiprocessing.cpu_count()),
+                desc="Encoding images with VAE...",
+            ):
+                for img in autoencoder.encode(batch.cuda()).mode():
+                    latims.append(img.unsqueeze(0).cpu().numpy())
+
+            class IntoFFCV(Dataset):
+                def __len__(self):
+                    return len(latims)
+
+                def __getitem__(self, idx):
+                    return latims[idx]
+
+            dtype = np.dtype("float32")
+            uint8 = False
 
         print("Preprocessing latent images into FFCV dataset...")
-        pipelines = {
-            "image": NDArrayField(shape=(_C[_F], image_size // _F, image_size // _F), dtype=np.dtype("float32"))
-        }
+        pipelines = {"image": NDArrayField(shape=new_shape, dtype=dtype)}
         DatasetWriter(cache_path, pipelines).from_indexed_dataset(IntoFFCV())
         print("Done!\n")
 
@@ -265,9 +318,19 @@ def train(rank, gpu, args):
     torch.cuda.manual_seed_all(args.seed + rank)
     device = torch.device(f"cuda:{gpu}")
 
-    train_loader = prepare_autoencoded_dataset(args.dataset, args.image_size, args.batch_size)
-    args.image_size = args.image_size // _F  # VAE reduces image_size by a factor of F
-    args.num_channels = _C[_F]
+    if args.pixel_shuffle:
+        global VAE
+        VAE = lambda: PixelShuffler(args.pixel_shuffle)
+        new_shape = (
+            args.num_channels * args.pixel_shuffle ** 2,
+            args.image_size // args.pixel_shuffle,
+            args.image_size // args.pixel_shuffle,
+        )
+    else:
+        new_shape = _C[_F], args.image_size // _F, args.image_size // _F
+
+    train_loader = prepare_autoencoded_dataset(args.dataset, args.image_size, args.batch_size, new_shape)
+    args.num_channels, args.image_size, args.image_size = new_shape
 
     bs = args.batch_size
     n_t = args.num_timesteps
@@ -299,13 +362,35 @@ def train(rank, gpu, args):
         embedding_type=args.embedding_type,
         fourier_scale=args.fourier_scale,
     ).to(device)
-    netD = Discriminator_small(nc=2 * n_c, ngf=args.ngf, t_emb_dim=args.t_emb_dim, act=nn.LeakyReLU(0.2)).to(device)
+    netD = (Discriminator_small if args.image_size < 256 else Discriminator_large)(
+        nc=2 * n_c, ngf=args.ngf, t_emb_dim=args.t_emb_dim, act=nn.LeakyReLU(0.2)
+    ).to(device)
 
     # broadcast_params(netG.parameters())
     # broadcast_params(netD.parameters())
 
-    optimizerD = optim.Adam(netD.parameters(), lr=args.lr_d, betas=(args.beta1, args.beta2))
-    optimizerG = optim.Adam(netG.parameters(), lr=args.lr_g, betas=(args.beta1, args.beta2))
+    if args.shampoo:
+        optimizerD = Shampoo(
+            netD.parameters(),
+            lr=args.lr_d,
+            betas=(args.beta1, args.beta2),
+            grafting_type=GraftingType.ADAM,
+            grafting_epsilon=1e-08,
+            grafting_beta2=args.beta2,
+            root_inv_dist=False,
+        )
+        optimizerG = Shampoo(
+            netG.parameters(),
+            lr=args.lr_g,
+            betas=(args.beta1, args.beta2),
+            grafting_type=GraftingType.ADAM,
+            grafting_epsilon=1e-08,
+            grafting_beta2=args.beta2,
+            root_inv_dist=False,
+        )
+    else:
+        optimizerD = optim.Adam(netD.parameters(), lr=args.lr_d, betas=(args.beta1, args.beta2))
+        optimizerG = optim.Adam(netG.parameters(), lr=args.lr_g, betas=(args.beta1, args.beta2))
 
     if args.use_ema:
         optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
@@ -330,7 +415,7 @@ def train(rank, gpu, args):
 
     if args.resume:
         checkpoint_file = os.path.join(exp_path, "resume_state.pth")
-        checkpoint = torch.load(checkpoint_file, map_location=device)
+        checkpoint = torch.load(checkpoint_file, map_location="cpu")
         init_iteration = checkpoint["nimgs"]
         netG.load_state_dict(checkpoint["netG_dict"])
         optimizerG.load_state_dict(checkpoint["optimizerG"])
@@ -420,7 +505,9 @@ def train(rank, gpu, args):
                     f"kimg {iteration / 1000:.2f}, G Loss: {errG.item():.4f}, D Loss: {(errD_real + errD_fake).item():.4f}"
                 )
 
-            if rank == 0 and iteration % (args.save_image_every * 1000) < bs:
+            if rank == 0 and (
+                (iteration % (args.save_image_every * 1000) < bs) or (iteration % 1000 < bs and iteration < 10_000)
+            ):
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
                 with torch.inference_mode():
@@ -501,6 +588,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--image_size", type=int, default=1024, help="size of image")
     parser.add_argument("--num_channels", type=int, default=3, help="channel of image")
+    parser.add_argument("--pixel_shuffle", type=int, default=4, help="pixel shuffling factor")
     parser.add_argument("--centered", action="store_false", default=True, help="-1,1 scale")
     parser.add_argument("--use_geometric", action="store_true", default=False)
     parser.add_argument("--beta_min", type=float, default=0.1, help="beta_min for diffusion")
@@ -531,12 +619,12 @@ if __name__ == "__main__":
     parser.add_argument("--exp_dir", default="/home/hans/modelzoo/diffusionGAN/", help="directory to save experiments in")
     parser.add_argument("--dataset", default="cifar10", help="name of dataset")
     parser.add_argument("--nz", type=int, default=100)
-    parser.add_argument("--num_timesteps", type=int, default=4)
+    parser.add_argument("--num_timesteps", type=int, default=2)
 
     parser.add_argument("--z_emb_dim", type=int, default=256)
     parser.add_argument("--t_emb_dim", type=int, default=256)
     parser.add_argument("--batch_size", type=int, default=64, help="input batch size")
-    parser.add_argument("--kimg", type=int, default=64_000)
+    parser.add_argument("--kimg", type=int, default=16_000)
     parser.add_argument("--ngf", type=int, default=64)
 
     parser.add_argument("--lr_g", type=float, default=1.5e-4, help="learning rate g")
@@ -544,16 +632,17 @@ if __name__ == "__main__":
     parser.add_argument("--beta1", type=float, default=0.5, help="beta1 for adam")
     parser.add_argument("--beta2", type=float, default=0.9, help="beta2 for adam")
     parser.add_argument("--no_lr_decay", action="store_true", default=False)
+    parser.add_argument("--shampoo", action="store_true", help="Use Shampoo pre-conditioner for Adam")
 
     parser.add_argument("--use_ema", action="store_false", default=True, help="use EMA or not")
     parser.add_argument("--ema_decay", type=float, default=0.9999, help="decay rate for EMA")
 
-    parser.add_argument("--r1_gamma", type=float, default=0.08, help="coef for r1 reg")
+    parser.add_argument("--r1_gamma", type=float, default=0.05, help="coef for r1 reg")
     parser.add_argument("--lazy_reg", type=int, default=12, help="lazy regularization")
 
-    parser.add_argument("--save_image_every", type=int, default=100, help="save image samples every x kimg")
-    parser.add_argument("--save_ckpt_every", type=int, default=400, help="save ckpt every x kimg")
-    parser.add_argument("--save_state_every", type=int, default=400, help="save full state for resuming every x kimg")
+    parser.add_argument("--save_image_every", type=int, default=10, help="save image samples every x kimg")
+    parser.add_argument("--save_ckpt_every", type=int, default=60, help="save ckpt every x kimg")
+    parser.add_argument("--save_state_every", type=int, default=1, help="save full state for resuming every x kimg")
 
     # ddp
     parser.add_argument("--num_proc_node", type=int, default=1, help="The number of nodes in multi node env.")
