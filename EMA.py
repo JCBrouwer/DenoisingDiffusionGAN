@@ -78,13 +78,16 @@ class EMA(Optimizer):
             return
 
         for group in self.optimizer.param_groups:
-            for i, p in enumerate(group["params"]):
+            for p in group["params"]:
                 if not p.requires_grad:
                     continue
-                ema = self.optimizer.state[p]["ema"]
-                if store_params_in_ema:
-                    tmp = p.data.detach()
-                    p.data = ema.detach()
-                    self.optimizer.state[p]["ema"] = tmp
+                if "ema" in self.optimizer.state[p]:
+                    ema = self.optimizer.state[p]["ema"]
+                    if store_params_in_ema:
+                        tmp = p.data.detach()
+                        p.data = ema.detach()
+                        self.optimizer.state[p]["ema"] = tmp
+                    else:
+                        p.data = ema.detach()
                 else:
-                    p.data = ema.detach()
+                    warnings.warn("swap_parameters_with_ema was called, but the EMA weights are not yet initialized.")

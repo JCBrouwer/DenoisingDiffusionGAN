@@ -7,6 +7,7 @@
 
 
 import argparse
+import gc
 import os
 import shutil
 from glob import glob
@@ -46,7 +47,7 @@ def broadcast_params(params):
 
 #%% Diffusion coefficients
 def var_func_vp(t, beta_min, beta_max):
-    log_mean_coeff = -0.25 * t ** 2 * (beta_max - beta_min) - 0.5 * t * beta_min
+    log_mean_coeff = -0.25 * t**2 * (beta_max - beta_min) - 0.5 * t * beta_min
     var = 1.0 - torch.exp(2.0 * log_mean_coeff)
     return var
 
@@ -92,7 +93,7 @@ def get_sigma_schedule(args, device):
     first = torch.tensor(1e-8)
     betas = torch.cat((first[None], betas)).to(device)
     betas = betas.type(torch.float32)
-    sigmas = betas ** 0.5
+    sigmas = betas**0.5
     a_s = torch.sqrt(1 - betas)
     return sigmas, a_s, betas
 
@@ -102,7 +103,7 @@ class Diffusion_Coefficients:
 
         self.sigmas, self.a_s, _ = get_sigma_schedule(args, device=device)
         self.a_s_cum = np.cumprod(self.a_s.cpu())
-        self.sigmas_cum = np.sqrt(1 - self.a_s_cum ** 2)
+        self.sigmas_cum = np.sqrt(1 - self.a_s_cum**2)
         self.a_s_prev = self.a_s.clone()
         self.a_s_prev[-1] = 1
 
@@ -266,7 +267,7 @@ def train(rank, gpu, args):
     if args.dataset not in ["cifar10", "stackmnist", "lsun", "celeba_256"]:
 
         files = sum([glob(f"{args.dataset}/*{ext}") for ext in torchvision.datasets.folder.IMG_EXTENSIONS], [])
-        cache_path = f"{Path(args.dataset).stem}_ffcv_dataset.beton"
+        cache_path = f"/home/hans/trainsets/{Path(args.dataset).stem}_ffcv_dataset.beton"
 
         class ToFloat(torch.nn.Module):
             def forward(self, x):
@@ -296,19 +297,30 @@ def train(rank, gpu, args):
             rebuild = True
 
         if rebuild:
-            ffcv_preprocess = torchvision.transforms.Compose(
-                [
-                    torchvision.transforms.Resize(args.image_size, antialias=True),
-                    torchvision.transforms.CenterCrop(args.image_size),
-                ]
-            )
+            if args.five_crop:
+                ffcv_preprocess = torchvision.transforms.Compose(
+                    [
+                        torchvision.transforms.Resize(args.image_size * 4, antialias=True),
+                        torchvision.transforms.FiveCrop(args.image_size),
+                    ]
+                )
+            else:
+                ffcv_preprocess = torchvision.transforms.Compose(
+                    [
+                        torchvision.transforms.Resize(args.image_size, antialias=True),
+                        torchvision.transforms.CenterCrop(args.image_size),
+                    ]
+                )
 
             class FFCVPreprocessorDataset(torch.utils.data.Dataset):
                 def __len__(self):
-                    return len(files)
+                    return len(files) * (5 if args.five_crop else 1)
 
                 def __getitem__(self, idx):
-                    return np.asarray(ffcv_preprocess(PIL.Image.open(files[idx]).convert("RGB")))[np.newaxis]
+                    im = PIL.Image.open(files[idx // (5 if args.five_crop else 1)]).convert("RGB")
+                    im = ffcv_preprocess(im)[idx % (5 if args.five_crop else 1)]
+                    im = np.asarray(im)[np.newaxis]
+                    return im
 
             data = FFCVPreprocessorDataset()
             DatasetWriter(
@@ -396,22 +408,26 @@ def train(rank, gpu, args):
     pos_coeff = Posterior_Coefficients(args, device)
     T = get_time_schedule(args, device)
 
-    if args.resume:
-        checkpoint_file = os.path.join(exp_path, "content.pth")
+    if args.resume or args.finetune:
+        checkpoint_file = os.path.join(exp_path, "content.pth") if args.resume else args.finetune
         checkpoint = torch.load(checkpoint_file, map_location=device)
         init_epoch = checkpoint["epoch"]
         epoch = init_epoch
-        netG.load_state_dict(checkpoint["netG_dict"])
         # load G
-
-        optimizerG.load_state_dict(checkpoint["optimizerG"])
-        schedulerG.load_state_dict(checkpoint["schedulerG"])
+        netG.load_state_dict(checkpoint["netG_dict"])
+        if not args.no_resume_optim:
+            optimizerG.load_state_dict(checkpoint["optimizerG"])
+            schedulerG.load_state_dict(checkpoint["schedulerG"])
         # load D
         netD.load_state_dict(checkpoint["netD_dict"])
-        optimizerD.load_state_dict(checkpoint["optimizerD"])
-        schedulerD.load_state_dict(checkpoint["schedulerD"])
+        if not args.no_resume_optim:
+            optimizerD.load_state_dict(checkpoint["optimizerD"])
+            schedulerD.load_state_dict(checkpoint["schedulerD"])
         global_step = checkpoint["global_step"]
-        print("=> loaded checkpoint (epoch {})".format(checkpoint["epoch"]))
+        del checkpoint
+        gc.collect()
+        torch.cuda.empty_cache()
+        print("=> loaded checkpoint (epoch {})".format(init_epoch))
     else:
         global_step, epoch, init_epoch = 0, 0, 0
 
@@ -543,7 +559,6 @@ def train(rank, gpu, args):
             if epoch % args.save_ckpt_every == 0:
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
-
                 torch.save(netG.state_dict(), os.path.join(exp_path, "netG_{}.pth".format(epoch)))
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
@@ -572,6 +587,8 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=1024, help="seed used for initialization")
 
     parser.add_argument("--resume", action="store_true", default=False)
+    parser.add_argument("--finetune", default=None, type=str, help='path to content.pth to resume from (don\'t also set --resume)')
+    parser.add_argument("--no_resume_optim", action="store_true", default=False)
 
     parser.add_argument("--image_size", type=int, default=32, help="size of image")
     parser.add_argument("--num_channels", type=int, default=3, help="channel of image")
@@ -603,6 +620,7 @@ if __name__ == "__main__":
     # geenrator and training
     parser.add_argument("--exp", default="experiment_cifar_default", help="name of experiment")
     parser.add_argument("--dataset", default="cifar10", help="name of dataset")
+    parser.add_argument("--five_crop", action='store_true', help="whether to use FiveCrop transform on data")
     parser.add_argument("--nz", type=int, default=100)
     parser.add_argument("--num_timesteps", type=int, default=4)
 

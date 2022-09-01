@@ -394,9 +394,13 @@ def train(rank, gpu, args):
 
     if args.use_ema:
         optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
+        optimizerG.step()
 
     schedulerG = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerG, args.kimg, eta_min=1e-5)
     schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerD, args.kimg, eta_min=1e-5)
+
+    scalerG = torch.cuda.amp.GradScaler(enabled=args.amp)
+    scalerD = torch.cuda.amp.GradScaler(enabled=args.amp)
 
     # netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
     # netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
@@ -434,71 +438,82 @@ def train(rank, gpu, args):
             x = next(train_loader)[0]
 
             # D STEP
+            netG.zero_grad(set_to_none=True)
             for p in netD.parameters():
                 p.requires_grad = True
-            netD.zero_grad()
 
-            # sample from p(x_0)
-            real_data = x.to(device, non_blocking=True)
+            with torch.cuda.amp.autocast(enabled=args.amp):
+                # sample from p(x_0)
+                real_data = x.to(device, non_blocking=True)
 
-            # sample t
-            t = torch.randint(0, n_t, (real_data.size(0),), device=device)
+                # sample t
+                t = torch.randint(0, n_t, (real_data.size(0),), device=device)
 
-            x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
-            if args.lazy_reg is None or iteration % (bs * args.lazy_reg) == 0:
-                x_t.requires_grad = True
+                x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
+                if args.lazy_reg is None or iteration % (bs * args.lazy_reg) == 0:
+                    x_t.requires_grad = True
 
-            # train with real
-            D_real = netD(x_t, t, x_tp1.detach()).view(-1)
+                # train with real
+                D_real = netD(x_t, t, x_tp1.detach()).view(-1)
 
-            errD_real = softplus(-D_real)
-            errD_real = errD_real.mean()
-            errD_real.backward(retain_graph=True)
+                errD_real = softplus(-D_real)
+                errD_real = errD_real.mean()
 
-            if args.lazy_reg is None or iteration % (bs * args.lazy_reg) == 0:
-                grad_real = torch.autograd.grad(outputs=D_real.sum(), inputs=x_t, create_graph=True)[0]
-                grad_penalty = (grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2).mean()
-                grad_penalty = args.r1_gamma / 2 * grad_penalty
-                grad_penalty.backward()
+                need_reg = args.lazy_reg is None or iteration % (bs * args.lazy_reg) == 0
+                with torch.cuda.amp.autocast(False):
+                    scalerD.scale(errD_real).backward(retain_graph=need_reg)
 
-            # train with fake
-            latent_z = torch.randn(bs, n_z, device=device)
+                if need_reg:
+                    grad_real = torch.autograd.grad(outputs=D_real.sum(), inputs=x_t, create_graph=True)[0]
+                    grad_penalty = (grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2).mean()
+                    grad_penalty = args.r1_gamma / 2 * grad_penalty
 
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
-            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
+                    with torch.cuda.amp.autocast(False):
+                        scalerD.scale(grad_penalty).backward()
 
-            output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
+                # train with fake
+                latent_z = torch.randn(bs, n_z, device=device)
 
-            errD_fake = softplus(output)
-            errD_fake = errD_fake.mean()
-            errD_fake.backward()
+                x_0_predict = netG(x_tp1.detach(), t, latent_z)
+                x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
-            optimizerD.step()
+                output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
+
+                errD_fake = softplus(output)
+                errD_fake = errD_fake.mean()
+
+            scalerD.scale(errD_fake).backward()
+            scalerD.step(optimizerD)
 
             # G STEP
+            netD.zero_grad(set_to_none=True)
             for p in netD.parameters():
                 p.requires_grad = False
-            netG.zero_grad()
 
-            t = torch.randint(0, n_t, (real_data.size(0),), device=device)
+            with torch.cuda.amp.autocast(enabled=args.amp):
+                t = torch.randint(0, n_t, (real_data.size(0),), device=device)
 
-            x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
+                x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
 
-            latent_z = torch.randn(bs, n_z, device=device)
+                latent_z = torch.randn(bs, n_z, device=device)
 
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
-            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
+                x_0_predict = netG(x_tp1.detach(), t, latent_z)
+                x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
-            output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
+                output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
 
-            errG = softplus(-output)
-            errG = errG.mean()
-            errG.backward()
-            optimizerG.step()
+                errG = softplus(-output)
+                errG = errG.mean()
+
+            scalerG.scale(errG).backward()
+            scalerG.step(optimizerG)
 
             if not args.no_lr_decay:
                 schedulerG.step()
                 schedulerD.step()
+
+            scalerG.update()
+            scalerD.update()
 
             if rank == 0 and iteration % (bs * 100) == 0:
                 pbar.write(
@@ -506,7 +521,7 @@ def train(rank, gpu, args):
                 )
 
             if rank == 0 and (
-                (iteration % (args.save_image_every * 1000) < bs) or (iteration % 1000 < bs and iteration < 10_000)
+                (iteration % (args.save_image_every * 1000) < bs) or (iteration % 100 < bs and iteration < 10_000)
             ):
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
@@ -524,7 +539,7 @@ def train(rank, gpu, args):
                         for sample in samples:
                             imgs.append(autoencoder.decode(sample.unsqueeze(0)).cpu())
                     imgs = torch.cat(imgs)
-                    if args.image_size * 32 > 512:
+                    if imgs.shape[-1] > 512:
                         imgs = interpolate(imgs, (512, 512), mode="bilinear", align_corners=True)
                     tv.utils.save_image(
                         imgs,
@@ -633,6 +648,7 @@ if __name__ == "__main__":
     parser.add_argument("--beta2", type=float, default=0.9, help="beta2 for adam")
     parser.add_argument("--no_lr_decay", action="store_true", default=False)
     parser.add_argument("--shampoo", action="store_true", help="Use Shampoo pre-conditioner for Adam")
+    parser.add_argument("--amp", action="store_true", help="Use automatic mixed precision")
 
     parser.add_argument("--use_ema", action="store_false", default=True, help="use EMA or not")
     parser.add_argument("--ema_decay", type=float, default=0.9999, help="decay rate for EMA")
