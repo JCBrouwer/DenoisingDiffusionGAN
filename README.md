@@ -6,6 +6,60 @@ There's a new training script which can train a diffusion GAN in the latent spac
 
 There's also a script for generating video interpolations: `interpolate.py`. This supports video initialization, latent interpolation, and arbitrary resolution generation (VRAM permitting).
 
+```bash
+optional arguments:
+  -h, --help            show this help message and exit
+  
+  # Interpolation parameters
+  --seed SEED           seed used for initialization
+  --n_frames N_FRAMES   number of frames in each interpolation
+  --fps FPS             frames per second in output video
+  --n_interps N_INTERPS
+                        number of interpolation videos to generate
+  --video_init VIDEO_INIT
+                        video to use as initialization
+  --var_scale VAR_SCALE
+                        weight of init noise when video_init is used. lower values preserve content video more.
+  --init_noise_smooth INIT_NOISE_SMOOTH
+                        sigma of temporal gaussian filter for initial noise
+  --latent_smooth LATENT_SMOOTH
+                        sigma of temporal gaussian filter for latent vectors
+  --post_noise_smooth POST_NOISE_SMOOTH
+                        sigma of temporal gaussian filter for posterior noise
+  --interp_seeds [INTERP_SEEDS ...]
+                        seeds for spline interpolation
+  --overscaling OVERSCALING
+                        factor with which to increase image size (relative to training size)
+  --smooth_device SMOOTH_DEVICE
+                        what device to perform smoothing on ('cpu' for long/large/high-sigma interpolations)
+  --init_video_smooth INIT_VIDEO_SMOOTH
+                        how much to smoothen initialization video
+  --out_dir OUT_DIR
+  
+  # Model-related parameters
+  --ckpt CKPT
+  --image_size IMAGE_SIZE
+                        size of image
+  --num_channels NUM_CHANNELS
+                        channel of image
+  --nz NZ
+  --num_timesteps NUM_TIMESTEPS
+  --batch_size BATCH_SIZE
+                        sample generating batch size
+  --n_mlp N_MLP         number of mlp layers for z
+  --ch_mult CH_MULT [CH_MULT ...]
+                        channel multiplier
+  --num_channels_dae NUM_CHANNELS_DAE
+                        number of initial channels in denosing model
+  --num_res_blocks NUM_RES_BLOCKS
+                        number of resnet blocks per scale
+  --attn_resolutions [ATTN_RESOLUTIONS ...]
+                        resolution of applying attention
+  --not_use_tanh
+  --latent              Model is a LatentDiffusionGAN
+```
+
+
 # Official PyTorch implementation of "Tackling the Generative Learning Trilemma with Denoising Diffusion GANs" [(ICLR 2022 Spotlight Paper)](https://arxiv.org/abs/2112.07804) #
 
 <div align="center">
