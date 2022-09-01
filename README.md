@@ -1,3 +1,11 @@
+# DenoisingDiffusionGAN
+
+My fork of [denoising-diffusion-gan](github.com/NVlabs/denoising-diffusion-gan).
+
+There's a new training script which can train a diffusion GAN in the latent space of a VAE or use pixel shuffle to generate 1024px images with essentially the same training memory requirements. The results weren't stunning immediately, but maybe with some better hyperparameters and more training time this could work pretty well.
+
+There's also a script for generating video interpolations: `interpolate.py`. This supports video initialization, latent interpolation, and arbitrary resolution generation (VRAM permitting).
+
 # Official PyTorch implementation of "Tackling the Generative Learning Trilemma with Denoising Diffusion GANs" [(ICLR 2022 Spotlight Paper)](https://arxiv.org/abs/2112.07804) #
 
 <div align="center">

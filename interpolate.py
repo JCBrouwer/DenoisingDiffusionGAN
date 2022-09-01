@@ -1,20 +1,22 @@
+import torch  # MUST IMPORT TORCH BEFORE DECORD
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+import decord as de
+
+de.bridge.set_bridge("torch")
+
 import argparse
-import os
 from pathlib import Path
 from uuid import uuid4
 
-import decord as de
 import numpy as np
-import torch
 import torchvision
 from torch.nn.functional import conv1d, interpolate, pad
 from torchcubicspline import NaturalCubicSpline, natural_cubic_spline_coeffs
 from tqdm import tqdm
 
 from diffusionGAN import DiffusionGAN
-
-de.bridge.set_bridge("torch")
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def gaussian_filter(x, sigma, mode="circular"):
@@ -34,7 +36,7 @@ def gaussian_filter(x, sigma, mode="circular"):
     channels = x.shape[1]
 
     kernel = torch.arange(-radius, radius + 1, dtype=torch.float32, device=x.device)
-    kernel = torch.exp(-0.5 / sigma ** 2 * kernel ** 2)
+    kernel = torch.exp(-0.5 / sigma**2 * kernel**2)
     kernel = kernel / kernel.sum()
     kernel = kernel.view(1, 1, len(kernel)).repeat(channels, 1, 1)
 
@@ -91,16 +93,15 @@ def interpolate(
     n_mlp,
     ckpt,
     out_dir,
-    **model_kwargs
+    **model_kwargs,
 ):
     if seed is None:
-        seed = np.random.randint(0, 2 ** 16)
+        seed = np.random.randint(0, 2**16)
     torch.manual_seed(seed)
     np.random.seed(seed)
 
     G = DiffusionGAN(
         ckpt=ckpt,
-        latent=True,
         num_timesteps=num_timesteps,
         image_size=image_size,
         num_channels=num_channels,
@@ -193,6 +194,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_res_blocks", type=int, default=2, help="number of resnet blocks per scale")
     parser.add_argument("--attn_resolutions", default=[4, 8, 16, 32], type=int, nargs="*", help="resolution of applying attention")
     parser.add_argument("--not_use_tanh", action="store_false", default=True)
+    parser.add_argument("--latent", action="store_true", help='Model is a LatentDiffusionGAN')
 
     parser.add_argument("--seed", type=int, default=None, help="seed used for initialization")
     parser.add_argument("--n_frames", type=int, default=20*24, help="number of frames in each interpolation")

@@ -25,7 +25,7 @@ def get_sigma_schedule(num_timesteps, beta_min, beta_max, use_geometric, device)
     if use_geometric:
         var = beta_min * ((beta_max / beta_min) ** t)
     else:
-        log_mean_coeff = -0.25 * t ** 2 * (beta_max - beta_min) - 0.5 * t * beta_min
+        log_mean_coeff = -0.25 * t**2 * (beta_max - beta_min) - 0.5 * t * beta_min
         var = 1.0 - torch.exp(2.0 * log_mean_coeff)
     alpha_bars = 1.0 - var
     betas = 1 - alpha_bars[1:] / alpha_bars[:-1]
@@ -33,7 +33,7 @@ def get_sigma_schedule(num_timesteps, beta_min, beta_max, use_geometric, device)
     first = torch.tensor(1e-8)
     betas = torch.cat((first[None], betas)).to(device)
     betas = betas.type(torch.float32)
-    sigmas = betas ** 0.5
+    sigmas = betas**0.5
     a_s = torch.sqrt(1 - betas)
     return sigmas, a_s, betas
 
@@ -100,7 +100,8 @@ class DiffusionGAN(torch.nn.Module):
             conditional=conditional,
         )
         if ckpt is not None:
-            self.G.load_state_dict(torch.load(ckpt, map_location="cpu"))
+            state_dict = torch.load(ckpt, map_location="cpu")
+            self.G.load_state_dict({k.replace("module.", ""): v for k, v in state_dict.items()})
         self.G.eval()
 
         if latent:

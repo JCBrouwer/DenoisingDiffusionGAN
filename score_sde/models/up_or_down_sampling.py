@@ -110,7 +110,7 @@ def upsample_conv_2d(x, w, k=None, factor=2, gain=1):
     # Setup filter kernel.
     if k is None:
         k = [1] * factor
-    k = _setup_kernel(k) * (gain * (factor ** 2))
+    k = _setup_kernel(k) * (gain * (factor**2))
     p = (k.shape[0] - factor) - (convW - 1)
 
     stride = (factor, factor)
@@ -220,7 +220,7 @@ def upsample_2d(x, k=None, factor=2, gain=1):
     assert isinstance(factor, int) and factor >= 1
     if k is None:
         k = [1] * factor
-    k = _setup_kernel(k) * (gain * (factor ** 2))
+    k = _setup_kernel(k) * (gain * (factor**2))
     p = k.shape[0] - factor
     return upfirdn2d(x, torch.tensor(k, device=x.device), up=factor, pad=((p + 1) // 2 + factor - 1, p // 2))
 

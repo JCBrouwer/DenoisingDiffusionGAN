@@ -55,7 +55,7 @@ class PixelNorm(nn.Module):
         super().__init__()
 
     def forward(self, input):
-        return input / torch.sqrt(torch.mean(input ** 2, dim=1, keepdim=True) + 1e-8)
+        return input / torch.sqrt(torch.mean(input**2, dim=1, keepdim=True) + 1e-8)
 
 
 @utils.register_model(name="ncsnpp")
@@ -96,7 +96,7 @@ class NCSNpp(nn.Module):
         self.num_res_blocks = num_res_blocks
         self.attn_resolutions = attn_resolutions
         self.num_resolutions = num_resolutions = len(ch_mult)
-        self.all_resolutions = all_resolutions = [image_size // (2 ** i) for i in range(num_resolutions)]
+        self.all_resolutions = all_resolutions = [image_size // (2**i) for i in range(num_resolutions)]
 
         self.conditional = conditional  # noise-conditional
         fir = fir

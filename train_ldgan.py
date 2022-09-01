@@ -31,7 +31,7 @@ sys.path.append("optimizers/shampoo")
 from shampoo import Shampoo
 from shampoo_utils import GraftingType
 
-_F = 16  # https://ommer-lab.com/files/latent-diffusion/kl-f32.zip
+_F = 16  # https://ommer-lab.com/files/latent-diffusion/kl-f16.zip
 VAE = lambda: AutoencoderKL(**configs[_F], ckpt_path=f"kl-f{_F}.ckpt").eval().requires_grad_(False)
 _C = {32: 64, 16: 16, 8: 4, 4: 3}
 
@@ -167,7 +167,7 @@ def broadcast_params(params):
 
 
 def var_func_vp(t, beta_min, beta_max):
-    log_mean_coeff = -0.25 * t ** 2 * (beta_max - beta_min) - 0.5 * t * beta_min
+    log_mean_coeff = -0.25 * t**2 * (beta_max - beta_min) - 0.5 * t * beta_min
     var = 1.0 - torch.exp(2.0 * log_mean_coeff)
     return var
 
@@ -200,7 +200,7 @@ def get_sigma_schedule(n_timestep, beta_min, beta_max, use_geometric, device):
     first = torch.tensor(1e-8)
     betas = torch.cat((first[None], betas)).to(device)
     betas = betas.type(torch.float32)
-    sigmas = betas ** 0.5
+    sigmas = betas**0.5
     a_s = torch.sqrt(1 - betas)
     return sigmas, a_s, betas
 
@@ -210,7 +210,7 @@ class DiffusionCoefficients:
 
         self.sigmas, self.a_s, _ = get_sigma_schedule(n_timestep, beta_min, beta_max, use_geometric, device)
         self.a_s_cum = np.cumprod(self.a_s.cpu())
-        self.sigmas_cum = np.sqrt(1 - self.a_s_cum ** 2)
+        self.sigmas_cum = np.sqrt(1 - self.a_s_cum**2)
         self.a_s_prev = self.a_s.clone()
         self.a_s_prev[-1] = 1
 
@@ -322,7 +322,7 @@ def train(rank, gpu, args):
         global VAE
         VAE = lambda: PixelShuffler(args.pixel_shuffle)
         new_shape = (
-            args.num_channels * args.pixel_shuffle ** 2,
+            args.num_channels * args.pixel_shuffle**2,
             args.image_size // args.pixel_shuffle,
             args.image_size // args.pixel_shuffle,
         )
